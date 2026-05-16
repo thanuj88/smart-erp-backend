@@ -26,8 +26,17 @@ router.post('/installment', [
   body('installmentMonths').isInt().isIn([3, 6, 12])
 ], validate, saleController.processInstallmentSale);
 
+// Get top selling products
+router.get('/top', requireTeller, saleController.getTopProducts);
+
 // Get today's sales
 router.get('/today', requireTeller, saleController.getTodaySales);
+
+// Generic timeframe summary
+router.get('/summary', requireTeller, saleController.getSummaryByRange);
+
+// Trend data for sales / purchase chart
+router.get('/summary/trend', requireTeller, saleController.getSalesTrend);
 
 // Get daily summary
 router.get('/summary/daily', requireTeller, saleController.getDailySummary);

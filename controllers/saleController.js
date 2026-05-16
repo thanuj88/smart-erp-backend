@@ -250,6 +250,39 @@ const processInstallmentSale = (req, res) => {
   }
 };
 
+// Get top selling products
+const getTopProducts = (req, res) => {
+  try {
+    const range = req.query.range || 'week';
+    const limit = Number(req.query.limit) || 6;
+    let whereClause = '';
+
+    if (range === 'week') {
+      whereClause = "WHERE DATE(sale_date) >= DATE('now','-7 days')";
+    } else if (range === 'month') {
+      whereClause = "WHERE DATE(sale_date) >= DATE('now','start of month')";
+    }
+
+    const topProducts = db.prepare(`
+      SELECT
+        item_name AS name,
+        SUM(quantity) AS qty,
+        SUM(total) AS total_sales,
+        COUNT(*) AS sale_count
+      FROM sales
+      ${whereClause}
+      GROUP BY item_name
+      ORDER BY qty DESC
+      LIMIT ?
+    `).all(limit);
+
+    res.json(topProducts);
+  } catch (error) {
+    console.error('Get top products error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
 // Get all sales (Admin only)
 const getAllSales = (req, res) => {
   try {
@@ -418,7 +451,6 @@ const getMonthlySummary = (req, res) => {
   }
 };
 
-// Get overall summary (Admin only)
 const getOverallSummary = (req, res) => {
   try {
     const summary = db.prepare(`
@@ -442,14 +474,154 @@ const getOverallSummary = (req, res) => {
   }
 };
 
+const getSummaryByRange = (req, res) => {
+  try {
+    const range = (req.query.range || '1Y').toUpperCase();
+    let rangeClause = '';
+
+    switch (range) {
+      case '1D':
+        rangeClause = "WHERE DATE(sale_date) = DATE('now')";
+        break;
+      case '1W':
+        rangeClause = "WHERE DATE(sale_date) >= DATE('now','-7 days')";
+        break;
+      case '1M':
+        rangeClause = "WHERE DATE(sale_date) >= DATE('now','-30 days')";
+        break;
+      case '3M':
+        rangeClause = "WHERE DATE(sale_date) >= DATE('now','-90 days')";
+        break;
+      case '6M':
+        rangeClause = "WHERE DATE(sale_date) >= DATE('now','-6 months')";
+        break;
+      case '1Y':
+      default:
+        rangeClause = "WHERE DATE(sale_date) >= DATE('now','-365 days')";
+        break;
+    }
+
+    const baseQuery = `
+      SELECT
+        COUNT(*) as total_sales,
+        SUM(total) as total_revenue,
+        SUM(buying_price * quantity) as total_purchase,
+        SUM(profit) as total_profit,
+        SUM(quantity) as total_items_sold
+      FROM sales
+      ${rangeClause}
+    `;
+
+    const summary = req.user.role === 'admin'
+      ? db.prepare(baseQuery).get()
+      : db.prepare(`${baseQuery.replace('FROM sales', 'FROM sales WHERE teller_id = ?').replace(rangeClause, rangeClause.replace('WHERE', 'AND'))}`).get(req.user.id);
+
+    res.json(summary || {
+      total_sales: 0,
+      total_revenue: 0,
+      total_purchase: 0,
+      total_profit: 0,
+      total_items_sold: 0
+    });
+  } catch (error) {
+    console.error('Get range summary error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const getSalesTrend = (req, res) => {
+  try {
+    const range = (req.query.range || '1Y').toUpperCase();
+    const monthNames = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    
+    let dateFilter = '';
+    let periodExpr = '';
+    let labelExpr = '';
+    let tellerFilter = '';
+
+    if (req.user.role !== 'admin') {
+      tellerFilter = ` AND teller_id = ${req.user.id}`;
+    }
+
+    switch (range) {
+      case '1D':
+        dateFilter = "WHERE sale_date >= datetime('now','-1 day')";
+        periodExpr = "strftime('%H', sale_date)";
+        labelExpr = "strftime('%H:00', sale_date)";
+        break;
+      case '1W':
+        dateFilter = "WHERE DATE(sale_date) >= DATE('now','-6 days')";
+        periodExpr = "DATE(sale_date)";
+        labelExpr = "strftime('%Y-%m-%d', sale_date)";
+        break;
+      case '1M':
+        dateFilter = "WHERE DATE(sale_date) >= DATE('now','-30 days')";
+        periodExpr = "strftime('%Y-%m-%d', sale_date)";
+        labelExpr = "strftime('%d', sale_date)";
+        break;
+      case '3M':
+      case '6M':
+      case '1Y':
+      default:
+        if (range === '3M') {
+          dateFilter = "WHERE DATE(sale_date) >= DATE('now','-90 days')";
+        } else if (range === '6M') {
+          dateFilter = "WHERE DATE(sale_date) >= DATE('now','-6 months')";
+        } else {
+          dateFilter = "WHERE DATE(sale_date) >= DATE('now','-365 days')";
+        }
+        periodExpr = "strftime('%Y-%m', sale_date)";
+        labelExpr = "strftime('%m', sale_date)";
+        break;
+    }
+
+    const selectedQuery = `
+      SELECT
+        ${labelExpr} AS label,
+        SUM(total) AS sales,
+        SUM(buying_price * quantity) AS purchase
+      FROM sales
+      ${dateFilter}${tellerFilter}
+      GROUP BY ${periodExpr}
+      ORDER BY ${periodExpr}
+    `;
+
+    const trend = db.prepare(selectedQuery).all();
+
+    // Post-process labels based on range
+    res.json(trend.map((row, idx) => {
+      let processedLabel = row.label;
+      if (range === '3M' || range === '6M' || range === '1Y') {
+        const monthNum = parseInt(row.label);
+        processedLabel = monthNames[monthNum] || row.label;
+      } else if (range === '1W') {
+        const date = new Date(row.label + 'T00:00:00');
+        processedLabel = dayNames[date.getDay()] || row.label;
+      }
+      return {
+        label: processedLabel,
+        sales: row.sales || 0,
+        purchase: row.purchase || 0
+      };
+    }));
+  } catch (error) {
+    console.error('Get sales trend error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
 module.exports = {
   processCashSale,
   processInstallmentSale,
+  getTopProducts,
   getAllSales,
   getTodaySales,
   getSalesByDateRange,
   getDailySummary,
   getWeeklySummary,
   getMonthlySummary,
-  getOverallSummary
+  getOverallSummary,
+  getSummaryByRange,
+  getSalesTrend
 };
