@@ -7,7 +7,7 @@ class InstallmentPlan {
              w.name as witness_name
       FROM installment_plans ip
       JOIN customers c ON ip.customer_id = c.id
-      JOIN witnesses w ON ip.witness_id = w.id
+      LEFT JOIN witnesses w ON ip.witness_id = w.id
       ORDER BY ip.created_at DESC
     `).all();
   }
@@ -18,7 +18,7 @@ class InstallmentPlan {
              w.name as witness_name, w.phone as witness_phone
       FROM installment_plans ip
       JOIN customers c ON ip.customer_id = c.id
-      JOIN witnesses w ON ip.witness_id = w.id
+      LEFT JOIN witnesses w ON ip.witness_id = w.id
       WHERE ip.id = ?
     `).get(id);
   }
@@ -29,7 +29,7 @@ class InstallmentPlan {
              w.name as witness_name
       FROM installment_plans ip
       JOIN customers c ON ip.customer_id = c.id
-      JOIN witnesses w ON ip.witness_id = w.id
+      LEFT JOIN witnesses w ON ip.witness_id = w.id
       WHERE ip.sale_id = ?
     `).get(saleId);
   }
@@ -46,9 +46,11 @@ class InstallmentPlan {
 
   static getActive() {
     return db.prepare(`
-      SELECT ip.*, c.name as customer_name, c.phone as customer_phone
+      SELECT ip.*, c.name as customer_name, c.phone as customer_phone,
+             w.name as witness_name
       FROM installment_plans ip
       JOIN customers c ON ip.customer_id = c.id
+      LEFT JOIN witnesses w ON ip.witness_id = w.id
       WHERE ip.status = 'active'
       ORDER BY ip.created_at DESC
     `).all();
@@ -56,9 +58,11 @@ class InstallmentPlan {
 
   static getCompleted() {
     return db.prepare(`
-      SELECT ip.*, c.name as customer_name, c.phone as customer_phone
+      SELECT ip.*, c.name as customer_name, c.phone as customer_phone,
+             w.name as witness_name
       FROM installment_plans ip
       JOIN customers c ON ip.customer_id = c.id
+      LEFT JOIN witnesses w ON ip.witness_id = w.id
       WHERE ip.status = 'completed'
       ORDER BY ip.created_at DESC
     `).all();
