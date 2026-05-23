@@ -27,8 +27,11 @@ router.get('/:id', itemController.getItemById);
 router.post('/', [
   requireAdmin,
   body('name').notEmpty().trim(),
-  body('price').isFloat({ min: 0 }),
-  body('quantity').isInt({ min: 0 })
+  body('sellingPrice').isFloat({ min: 0 }),
+  body('buyingPrice').optional({ values: 'falsy' }).isFloat({ min: 0 }),
+  body('quantity').isInt({ min: 0 }),
+  body('categoryId').optional({ values: 'falsy' }),
+  body('description').optional({ values: 'falsy' }).trim(),
 ], validate, itemController.createItem);
 
 router.put('/:id', requireAdmin, itemController.updateItem);
