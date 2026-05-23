@@ -4,21 +4,77 @@ const { body } = require('express-validator');
 const authController = require('../controllers/authController');
 const { authenticate } = require('../middleware/auth');
 const validate = require('../middleware/validate');
+const {
+  loginLimiter,
+  registerLimiter,
+  passwordResetLimiter,
+} = require('../middleware/rateLimit');
 
-// Login route
-router.post('/login', [
-  body('username').notEmpty().trim(),
-  body('password').notEmpty()
-], validate, authController.login);
+router.post(
+  '/register',
+  registerLimiter,
+  [
+    body('email').isEmail().normalizeEmail(),
+    body('password').isLength({ min: 8 }),
+    body('fullName').notEmpty().trim(),
+    body('businessName').notEmpty().trim(),
+    body('username').optional().trim(),
+  ],
+  validate,
+  authController.register
+);
 
-// Get current user profile
+router.get('/verify-email', authController.verifyEmail);
+router.post('/verify-email', authController.verifyEmail);
+
+router.post(
+  '/login',
+  loginLimiter,
+  [body('password').notEmpty()],
+  validate,
+  authController.login
+);
+
+router.post(
+  '/login/pin',
+  loginLimiter,
+  [body('username').notEmpty(), body('pin').notEmpty()],
+  validate,
+  authController.loginPin
+);
+
+router.post('/refresh', authController.refresh);
+
+router.post('/logout', authenticate, authController.logout);
+
+router.post(
+  '/forgot-password',
+  passwordResetLimiter,
+  [body('email').isEmail().normalizeEmail()],
+  validate,
+  authController.forgotPassword
+);
+
+router.post(
+  '/reset-password',
+  passwordResetLimiter,
+  [body('token').notEmpty(), body('newPassword').isLength({ min: 8 })],
+  validate,
+  authController.resetPassword
+);
+
 router.get('/profile', authenticate, authController.getProfile);
 
-// Change password
-router.post('/change-password', [
+router.post(
+  '/change-password',
   authenticate,
-  body('currentPassword').notEmpty(),
-  body('newPassword').isLength({ min: 6 })
-], validate, authController.changePassword);
+  [body('currentPassword').notEmpty(), body('newPassword').isLength({ min: 8 })],
+  validate,
+  authController.changePassword
+);
+
+router.get('/sessions', authenticate, authController.listSessions);
+router.delete('/sessions/:id', authenticate, authController.revokeSession);
+router.get('/branches', authController.listBranches);
 
 module.exports = router;

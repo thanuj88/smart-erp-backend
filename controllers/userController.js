@@ -1,10 +1,23 @@
 const bcrypt = require('bcryptjs');
-const User = require('../models/User');
+const { getAuthRepository } = require('../repositories/factory');
+const authConfig = require('../config/auth');
+const { ROLES, normalizeRole } = require('../config/permissions');
+const tokenService = require('../services/tokenService');
 
-// Get all users (Admin only)
-const getAllUsers = (req, res) => {
+const STAFF_ROLES = [
+  ROLES.MANAGER,
+  ROLES.TELLER,
+  ROLES.INVENTORY,
+  ROLES.ACCOUNTANT,
+];
+
+const getAllUsers = async (req, res) => {
   try {
-    const users = User.getAll();
+    const tenantId = req.user.role === ROLES.SUPER_ADMIN ? null : req.user.tenantId;
+    const repo = getAuthRepository();
+    const users = tenantId
+      ? await repo.getStaffUsers(tenantId)
+      : await repo.getStaffUsers(req.user.tenantId || 1);
     res.json(users);
   } catch (error) {
     console.error('Get users error:', error);
@@ -12,28 +25,45 @@ const getAllUsers = (req, res) => {
   }
 };
 
-// Create new user (Admin only)
 const createUser = async (req, res) => {
   try {
-    const { username, password, role } = req.body;
+    const { username, password, role, email, fullName, branchId, pin } = req.body;
+    const tenantId = req.user.tenantId;
+    const repo = getAuthRepository();
 
     if (!username || !password || !role) {
       return res.status(400).json({ error: 'Username, password, and role are required' });
     }
 
-    if (!['admin', 'teller'].includes(role)) {
-      return res.status(400).json({ error: 'Role must be either "admin" or "teller"' });
+    const normalizedRole = normalizeRole(role);
+    if (!STAFF_ROLES.includes(normalizedRole)) {
+      return res.status(400).json({
+        error: 'Staff role must be MANAGER, TELLER, INVENTORY, or ACCOUNTANT',
+      });
     }
 
-    const existingUser = User.findByUsername(username);
-
-    if (existingUser) {
-      return res.status(400).json({ error: 'Username already exists' });
+    const existing = await repo.findUserByUsernameOrEmail(username, tenantId);
+    if (existing) {
+      return res.status(400).json({ error: 'Username already exists in this store' });
     }
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const userId = User.create(username, hashedPassword, role);
-    const newUser = User.findById(userId);
+    const hashedPassword = await bcrypt.hash(password, authConfig.bcryptRounds);
+    let pinHash = null;
+    if (pin) {
+      pinHash = await tokenService.hashPin(pin);
+    }
+
+    const newUser = await repo.createStaffUser({
+      tenantId,
+      branchId: branchId || req.user.branchId,
+      username,
+      email,
+      hashedPassword,
+      role: normalizedRole,
+      fullName,
+      pinHash,
+      isActive: true,
+    });
 
     res.status(201).json(newUser);
   } catch (error) {
@@ -42,53 +72,67 @@ const createUser = async (req, res) => {
   }
 };
 
-// Update user (Admin only)
-const updateUser = (req, res) => {
+const updateUser = async (req, res) => {
   try {
-    const { username, role } = req.body;
     const userId = req.params.id;
+    const { username, role, fullName, branchId, pin } = req.body;
+    const repo = getAuthRepository();
 
-    const user = User.findById(userId);
-
+    const user = await repo.findUserById(userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    if (role && !['admin', 'teller'].includes(role)) {
-      return res.status(400).json({ error: 'Role must be either "admin" or "teller"' });
+    if (req.user.role !== ROLES.SUPER_ADMIN && user.tenant_id !== req.user.tenantId) {
+      return res.status(403).json({ error: 'Cannot modify users outside your organization' });
     }
 
-    User.update(
-      userId,
-      username || user.username,
-      role || user.role
-    );
+    if (role) {
+      const normalizedRole = normalizeRole(role);
+      if (normalizedRole === ROLES.SUPER_ADMIN || normalizedRole === ROLES.TENANT_ADMIN) {
+        return res.status(400).json({ error: 'Cannot assign admin roles via this endpoint' });
+      }
+    }
 
-    const updatedUser = User.findById(userId);
-    res.json(updatedUser);
+    let pinHash;
+    if (pin !== undefined) {
+      pinHash = pin ? await tokenService.hashPin(pin) : null;
+    }
+
+    const updated = await repo.updateStaffUser(userId, {
+      username,
+      role: role ? normalizeRole(role) : undefined,
+      fullName,
+      branchId,
+      pinHash,
+    });
+
+    res.json(updated);
   } catch (error) {
     console.error('Update user error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
 
-// Delete user (Admin only)
-const deleteUser = (req, res) => {
+const deleteUser = async (req, res) => {
   try {
     const userId = req.params.id;
 
-    // Prevent deleting self
-    if (userId == req.user.id) {
+    if (String(userId) === String(req.user.id)) {
       return res.status(400).json({ error: 'Cannot delete your own account' });
     }
 
-    const user = User.findById(userId);
-
+    const repo = getAuthRepository();
+    const user = await repo.findUserById(userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    User.delete(userId);
+    if (req.user.role !== ROLES.SUPER_ADMIN && user.tenant_id !== req.user.tenantId) {
+      return res.status(403).json({ error: 'Cannot delete users outside your organization' });
+    }
+
+    await repo.softDeleteStaffUser(userId);
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
     console.error('Delete user error:', error);
@@ -100,5 +144,5 @@ module.exports = {
   getAllUsers,
   createUser,
   updateUser,
-  deleteUser
+  deleteUser,
 };

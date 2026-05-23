@@ -1,90 +1,69 @@
-const InstallmentPlan = require('../models/InstallmentPlan');
-const InstallmentPayment = require('../models/InstallmentPayment');
-const Customer = require('../models/Customer');
+const installmentPlanService = require('../services/installmentPlanService');
+const { resolveTenantId } = require('../utils/tenant');
 
-// Get all installment plans
-const getAllPlans = (req, res) => {
+const getAllPlans = async (req, res) => {
   try {
-    const plans = InstallmentPlan.getAll();
+    const plans = await installmentPlanService.getAll(resolveTenantId(req));
     res.json(plans);
   } catch (error) {
-    console.error('Get installment plans error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
 
-// Get active installment plans
-const getActivePlans = (req, res) => {
+const getActivePlans = async (req, res) => {
   try {
-    const plans = InstallmentPlan.getActive();
+    const plans = await installmentPlanService.getActive(resolveTenantId(req));
     res.json(plans);
   } catch (error) {
-    console.error('Get active plans error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
 
-// Get completed installment plans
-const getCompletedPlans = (req, res) => {
+const getCompletedPlans = async (req, res) => {
   try {
-    const plans = InstallmentPlan.getCompleted();
+    const plans = await installmentPlanService.getCompleted(resolveTenantId(req));
     res.json(plans);
   } catch (error) {
-    console.error('Get completed plans error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
 
-// Get plan by ID with payments
-const getPlanById = (req, res) => {
+const getPlanById = async (req, res) => {
   try {
-    const plan = InstallmentPlan.getById(req.params.id);
-    
-    if (!plan) {
-      return res.status(404).json({ error: 'Installment plan not found' });
-    }
-
-    const payments = InstallmentPayment.getByPlanId(plan.id);
-    const customer = Customer.getById(plan.customer_id);
-
-    res.json({
-      ...plan,
-      payments,
-      customer
-    });
+    const plan = await installmentPlanService.getById(resolveTenantId(req), req.params.id);
+    if (!plan) return res.status(404).json({ error: 'Installment plan not found' });
+    res.json(plan);
   } catch (error) {
-    console.error('Get plan error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
 
-// Get plans by customer
-const getPlansByCustomer = (req, res) => {
+const getPlansByCustomer = async (req, res) => {
   try {
-    const plans = InstallmentPlan.getByCustomerId(req.params.customerId);
+    const plans = await installmentPlanService.getByCustomerId(
+      resolveTenantId(req),
+      req.params.customerId
+    );
     res.json(plans);
   } catch (error) {
-    console.error('Get customer plans error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
 
-// Update plan status
-const updatePlanStatus = (req, res) => {
+const updatePlanStatus = async (req, res) => {
   try {
     const { status } = req.body;
-    const planId = req.params.id;
-
     if (!['active', 'completed', 'defaulted'].includes(status)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
-
-    InstallmentPlan.updateStatus(planId, status);
-    const updated = InstallmentPlan.getById(planId);
-
-    res.json(updated);
+    const plan = await installmentPlanService.updateStatus(
+      resolveTenantId(req),
+      req.params.id,
+      status
+    );
+    if (!plan) return res.status(404).json({ error: 'Installment plan not found' });
+    res.json(plan);
   } catch (error) {
-    console.error('Update plan status error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -95,5 +74,5 @@ module.exports = {
   getCompletedPlans,
   getPlanById,
   getPlansByCustomer,
-  updatePlanStatus
+  updatePlanStatus,
 };

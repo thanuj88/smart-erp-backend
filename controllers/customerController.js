@@ -1,9 +1,9 @@
-const Customer = require('../models/Customer');
+const customerService = require('../services/customerService');
+const { resolveTenantId } = require('../utils/tenant');
 
-// Get all customers
-const getAllCustomers = (req, res) => {
+const getAllCustomers = async (req, res) => {
   try {
-    const customers = Customer.getAll();
+    const customers = await customerService.getAll(resolveTenantId(req));
     res.json(customers);
   } catch (error) {
     console.error('Get customers error:', error);
@@ -11,15 +11,10 @@ const getAllCustomers = (req, res) => {
   }
 };
 
-// Get customer by ID
-const getCustomerById = (req, res) => {
+const getCustomerById = async (req, res) => {
   try {
-    const customer = Customer.getById(req.params.id);
-    
-    if (!customer) {
-      return res.status(404).json({ error: 'Customer not found' });
-    }
-
+    const customer = await customerService.getById(resolveTenantId(req), req.params.id);
+    if (!customer) return res.status(404).json({ error: 'Customer not found' });
     res.json(customer);
   } catch (error) {
     console.error('Get customer error:', error);
@@ -27,16 +22,11 @@ const getCustomerById = (req, res) => {
   }
 };
 
-// Search customers
-const searchCustomers = (req, res) => {
+const searchCustomers = async (req, res) => {
   try {
     const { q } = req.query;
-    
-    if (!q) {
-      return res.status(400).json({ error: 'Search query is required' });
-    }
-
-    const customers = Customer.search(q);
+    if (!q) return res.status(400).json({ error: 'Search query is required' });
+    const customers = await customerService.search(resolveTenantId(req), q);
     res.json(customers);
   } catch (error) {
     console.error('Search customers error:', error);
@@ -47,5 +37,5 @@ const searchCustomers = (req, res) => {
 module.exports = {
   getAllCustomers,
   getCustomerById,
-  searchCustomers
+  searchCustomers,
 };

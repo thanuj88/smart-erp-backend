@@ -1,612 +1,170 @@
-const Sale = require('../models/Sale');
-const Item = require('../models/Item');
-const Customer = require('../models/Customer');
-const Witness = require('../models/Witness');
-const InstallmentPlan = require('../models/InstallmentPlan');
-const InstallmentPayment = require('../models/InstallmentPayment');
-const InstallmentSettings = require('../models/InstallmentSettings');
-const db = require('../config/db');
 const path = require('path');
 const fs = require('fs');
+const orderService = require('../services/orderService');
+const { resolveTenantId } = require('../utils/tenant');
 
-// Save uploaded image
 const saveImage = (base64Data, folder, filename) => {
   if (!base64Data) return null;
-  
   const uploadsDir = path.join(__dirname, '../uploads', folder);
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-  }
-
+  if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
   const base64Image = base64Data.split(';base64,').pop();
   const filePath = path.join(uploadsDir, filename);
   fs.writeFileSync(filePath, base64Image, { encoding: 'base64' });
-  
   return `/uploads/${folder}/${filename}`;
 };
 
-// Process a cash sale
-const processCashSale = (req, res) => {
+const handleSaleError = (res, error) => {
+  if (error.status) {
+    return res.status(error.status).json({
+      error: error.message,
+      ...(error.available !== undefined ? { available: error.available } : {}),
+    });
+  }
+  console.error('Sale error:', error);
+  return res.status(500).json({ error: 'Server error' });
+};
+
+const processCashSale = async (req, res) => {
   try {
     const { itemId, quantity } = req.body;
-
     if (!itemId || !quantity || quantity <= 0) {
       return res.status(400).json({ error: 'Valid itemId and quantity are required' });
     }
-
-    const item = Item.getById(itemId);
-
-    if (!item) {
-      return res.status(404).json({ error: 'Item not found' });
-    }
-
-    if (item.quantity < quantity) {
-      return res.status(400).json({ 
-        error: 'Insufficient stock', 
-        available: item.quantity 
-      });
-    }
-
-    // Use transaction
-    const transaction = db.transaction(() => {
-      // Calculate total and profit
-      const total = item.selling_price * quantity;
-      const profit = (item.selling_price - item.buying_price) * quantity;
-
-      // Create sale record
-      const saleId = db.prepare(`
-        INSERT INTO sales (item_id, item_name, quantity, buying_price, selling_price, price, 
-                          total, profit, payment_type, teller_id, teller_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        item.id,
-        item.name,
-        quantity,
-        item.buying_price,
-        item.selling_price,
-        item.price,
-        total,
-        profit,
-        'cash',
-        req.user.id,
-        req.user.username
-      ).lastInsertRowid;
-
-      // Deduct quantity from item
-      Item.decrementQuantity(item.id, quantity);
-
-      return db.prepare('SELECT * FROM sales WHERE id = ?').get(saleId);
-    });
-
-    const sale = transaction();
-
+    const sale = await orderService.processCashSale(resolveTenantId(req), req.user, { itemId, quantity });
     res.status(201).json(sale);
   } catch (error) {
-    console.error('Process cash sale error:', error);
-    res.status(500).json({ error: 'Server error during sale processing' });
+    return handleSaleError(res, error);
   }
 };
 
-// Process an installment sale
-const processInstallmentSale = (req, res) => {
+const processInstallmentSale = async (req, res) => {
   try {
-    const { 
-      itemId, 
-      quantity, 
-      customer,
-      witness,
-      downPayment,
-      installmentMonths
-    } = req.body;
-
-    // Validate required fields
-    if (!itemId || !quantity || !customer || !witness || !downPayment || !installmentMonths) {
+    const { itemId, quantity, customer, witness, downPayment, installmentMonths } = req.body;
+    if (!itemId || !quantity || !customer || !witness || downPayment === undefined || !installmentMonths) {
       return res.status(400).json({ error: 'All fields are required for installment sale' });
     }
-
-    if (!customer.name || !customer.phone || !customer.idCardNo || !customer.address) {
-      return res.status(400).json({ error: 'Complete customer details are required' });
-    }
-
-    if (!witness.name || !witness.phone || !witness.idCardNo || !witness.address) {
-      return res.status(400).json({ error: 'Complete witness details are required' });
-    }
-
-    const item = Item.getById(itemId);
-
-    if (!item) {
-      return res.status(404).json({ error: 'Item not found' });
-    }
-
-    if (item.quantity < quantity) {
-      return res.status(400).json({ 
-        error: 'Insufficient stock', 
-        available: item.quantity 
-      });
-    }
-
-    const totalAmount = item.selling_price * quantity;
-
-    if (downPayment >= totalAmount) {
-      return res.status(400).json({ error: 'Down payment must be less than total amount' });
-    }
-
-    // Get interest rate
-    const settings = InstallmentSettings.getByMonths(installmentMonths);
-    if (!settings) {
-      return res.status(400).json({ error: 'Invalid installment months' });
-    }
-
-    // Calculate installment details
-    const remainingAmount = totalAmount - downPayment;
-    const interestAmount = (remainingAmount * settings.interest_rate) / 100;
-    const totalWithInterest = remainingAmount + interestAmount;
-    const monthlyPayment = totalWithInterest / installmentMonths;
-    const profit = (item.selling_price - item.buying_price) * quantity;
-
-    // Use transaction for all operations
-    const transaction = db.transaction(() => {
-      // Save customer images
-      let customerIdImage = null;
-      if (customer.idImage) {
-        const customerFilename = `customer_${Date.now()}_${customer.idCardNo}.jpg`;
-        customerIdImage = saveImage(customer.idImage, 'customers', customerFilename);
-      }
-
-      // Create or get customer
-      let existingCustomer = Customer.getByIdCardNo(customer.idCardNo);
-      let customerId;
-      
-      if (existingCustomer) {
-        customerId = existingCustomer.id;
-      } else {
-        customerId = Customer.create(
-          customer.name,
-          customer.phone,
-          customer.idCardNo,
-          customer.email,
-          customer.address,
-          customerIdImage
-        );
-      }
-
-      // Save witness images
-      let witnessIdImage = null;
-      if (witness.idImage) {
-        const witnessFilename = `witness_${Date.now()}_${witness.idCardNo}.jpg`;
-        witnessIdImage = saveImage(witness.idImage, 'witnesses', witnessFilename);
-      }
-
-      // Create witness
-      const witnessId = Witness.create(
-        witness.name,
-        witness.phone,
-        witness.idCardNo,
-        witness.address,
-        witnessIdImage
-      );
-
-      // Create sale record
-      const saleId = db.prepare(`
-        INSERT INTO sales (item_id, item_name, quantity, buying_price, selling_price, price,
-                          total, profit, payment_type, customer_id, teller_id, teller_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        item.id,
-        item.name,
-        quantity,
-        item.buying_price,
-        item.selling_price,
-        item.price,
-        totalAmount,
-        profit,
-        'installment',
-        customerId,
-        req.user.id,
-        req.user.username
-      ).lastInsertRowid;
-
-      // Create installment plan
-      const planId = InstallmentPlan.create({
-        saleId,
-        customerId,
-        witnessId,
-        totalAmount,
-        downPayment,
-        remainingAmount,
-        interestRate: settings.interest_rate,
-        interestAmount,
-        totalWithInterest,
-        installmentMonths,
-        monthlyPayment
-      });
-
-      // Create installment payments schedule
-      const startDate = new Date();
-      for (let i = 1; i <= installmentMonths; i++) {
-        const dueDate = new Date(startDate);
-        dueDate.setMonth(dueDate.getMonth() + i);
-        const dueDateStr = dueDate.toISOString().split('T')[0];
-        
-        InstallmentPayment.create(planId, i, monthlyPayment, dueDateStr);
-      }
-
-      // Deduct quantity from item
-      Item.decrementQuantity(item.id, quantity);
-
-      return {
-        sale: db.prepare('SELECT * FROM sales WHERE id = ?').get(saleId),
-        plan: InstallmentPlan.getById(planId),
-        payments: InstallmentPayment.getByPlanId(planId)
-      };
-    });
-
-    const result = transaction();
-
+    const result = await orderService.processInstallmentSale(
+      resolveTenantId(req),
+      req.user,
+      { itemId, quantity, customer, witness, downPayment, installmentMonths },
+      saveImage
+    );
     res.status(201).json(result);
   } catch (error) {
-    console.error('Process installment sale error:', error);
-    res.status(500).json({ error: 'Server error during installment sale processing' });
+    return handleSaleError(res, error);
   }
 };
 
-// Get top selling products
-const getTopProducts = (req, res) => {
+const getTopProducts = async (req, res) => {
   try {
     const range = req.query.range || 'week';
     const limit = Number(req.query.limit) || 6;
-    let whereClause = '';
-
-    if (range === 'week') {
-      whereClause = "WHERE DATE(sale_date) >= DATE('now','-7 days')";
-    } else if (range === 'month') {
-      whereClause = "WHERE DATE(sale_date) >= DATE('now','start of month')";
-    }
-
-    const topProducts = db.prepare(`
-      SELECT
-        item_name AS name,
-        SUM(quantity) AS qty,
-        SUM(total) AS total_sales,
-        COUNT(*) AS sale_count
-      FROM sales
-      ${whereClause}
-      GROUP BY item_name
-      ORDER BY qty DESC
-      LIMIT ?
-    `).all(limit);
-
-    res.json(topProducts);
+    const top = await orderService.getTopProducts(resolveTenantId(req), range, limit);
+    res.json(top);
   } catch (error) {
-    console.error('Get top products error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
 
-// Get all sales (Admin only)
-const getAllSales = (req, res) => {
+const getAllSales = async (req, res) => {
   try {
-    const sales = db.prepare('SELECT * FROM sales ORDER BY sale_date DESC').all();
+    const sales = await orderService.getAll(resolveTenantId(req));
     res.json(sales);
   } catch (error) {
-    console.error('Get sales error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
 
-// Get today's sales
-const getTodaySales = (req, res) => {
+const getTodaySales = async (req, res) => {
   try {
-    let sales;
-    
-    if (req.user.role === 'admin') {
-      sales = db.prepare('SELECT * FROM sales WHERE DATE(sale_date) = DATE(\'now\') ORDER BY sale_date DESC').all();
-    } else {
-      sales = db.prepare('SELECT * FROM sales WHERE teller_id = ? AND DATE(sale_date) = DATE(\'now\') ORDER BY sale_date DESC').all(req.user.id);
-    }
-
+    const sales = await orderService.getToday(resolveTenantId(req), req.user);
     res.json(sales);
   } catch (error) {
-    console.error('Get today sales error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
 
-// Get sales by date range (Admin only)
-const getSalesByDateRange = (req, res) => {
+const getSalesByDateRange = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-
     if (!startDate || !endDate) {
       return res.status(400).json({ error: 'Start and end dates are required' });
     }
-
-    const sales = db.prepare('SELECT * FROM sales WHERE DATE(sale_date) BETWEEN DATE(?) AND DATE(?) ORDER BY sale_date DESC').all(startDate, endDate);
+    const sales = await orderService.getByDateRange(resolveTenantId(req), startDate, endDate);
     res.json(sales);
   } catch (error) {
-    console.error('Get sales by date range error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
 
-// Get daily summary with profit
-const getDailySummary = (req, res) => {
+const getDailySummary = async (req, res) => {
   try {
-    let summary;
-
-    if (req.user.role === 'admin') {
-      summary = db.prepare(`
-        SELECT 
-          DATE(sale_date) as date,
-          COUNT(*) as total_sales,
-          SUM(total) as total_revenue,
-          SUM(profit) as total_profit,
-          SUM(quantity) as total_items_sold
-        FROM sales 
-        WHERE DATE(sale_date) = DATE('now')
-        GROUP BY DATE(sale_date)
-      `).get();
-    } else {
-      summary = db.prepare(`
-        SELECT 
-          DATE(sale_date) as date,
-          COUNT(*) as total_sales,
-          SUM(total) as total_revenue,
-          SUM(profit) as total_profit,
-          SUM(quantity) as total_items_sold
-        FROM sales 
-        WHERE teller_id = ? AND DATE(sale_date) = DATE('now')
-        GROUP BY DATE(sale_date)
-      `).get(req.user.id);
-    }
-
-    res.json(summary || {
-      date: new Date().toISOString().split('T')[0],
-      total_sales: 0,
-      total_revenue: 0,
-      total_profit: 0,
-      total_items_sold: 0
-    });
-  } catch (error) {
-    console.error('Get daily summary error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-};
-
-// Get weekly summary
-const getWeeklySummary = (req, res) => {
-  try {
-    let summary;
-
-    if (req.user.role === 'admin') {
-      summary = db.prepare(`
-        SELECT 
-          COUNT(*) as total_sales,
-          SUM(total) as total_revenue,
-          SUM(profit) as total_profit,
-          SUM(quantity) as total_items_sold
-        FROM sales 
-        WHERE DATE(sale_date) >= DATE('now', '-7 days')
-      `).get();
-    } else {
-      summary = db.prepare(`
-        SELECT 
-          COUNT(*) as total_sales,
-          SUM(total) as total_revenue,
-          SUM(profit) as total_profit,
-          SUM(quantity) as total_items_sold
-        FROM sales 
-        WHERE teller_id = ? AND DATE(sale_date) >= DATE('now', '-7 days')
-      `).get(req.user.id);
-    }
-
-    res.json(summary || {
-      total_sales: 0,
-      total_revenue: 0,
-      total_profit: 0,
-      total_items_sold: 0
-    });
-  } catch (error) {
-    console.error('Get weekly summary error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-};
-
-// Get monthly summary
-const getMonthlySummary = (req, res) => {
-  try {
-    let summary;
-
-    if (req.user.role === 'admin') {
-      summary = db.prepare(`
-        SELECT 
-          COUNT(*) as total_sales,
-          SUM(total) as total_revenue,
-          SUM(profit) as total_profit,
-          SUM(quantity) as total_items_sold
-        FROM sales 
-        WHERE DATE(sale_date) >= DATE('now', 'start of month')
-      `).get();
-    } else {
-      summary = db.prepare(`
-        SELECT 
-          COUNT(*) as total_sales,
-          SUM(total) as total_revenue,
-          SUM(profit) as total_profit,
-          SUM(quantity) as total_items_sold
-        FROM sales 
-        WHERE teller_id = ? AND DATE(sale_date) >= DATE('now', 'start of month')
-      `).get(req.user.id);
-    }
-
-    res.json(summary || {
-      total_sales: 0,
-      total_revenue: 0,
-      total_profit: 0,
-      total_items_sold: 0
-    });
-  } catch (error) {
-    console.error('Get monthly summary error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-};
-
-const getOverallSummary = (req, res) => {
-  try {
-    const summary = db.prepare(`
-      SELECT 
-        COUNT(*) as total_sales,
-        SUM(total) as total_revenue,
-        SUM(profit) as total_profit,
-        SUM(quantity) as total_items_sold
-      FROM sales
-    `).get();
-    
-    res.json(summary || {
-      total_sales: 0,
-      total_revenue: 0,
-      total_profit: 0,
-      total_items_sold: 0
-    });
-  } catch (error) {
-    console.error('Get overall summary error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-};
-
-const getSummaryByRange = (req, res) => {
-  try {
-    const range = (req.query.range || '1Y').toUpperCase();
-    let rangeClause = '';
-
-    switch (range) {
-      case '1D':
-        rangeClause = "WHERE DATE(sale_date) = DATE('now')";
-        break;
-      case '1W':
-        rangeClause = "WHERE DATE(sale_date) >= DATE('now','-7 days')";
-        break;
-      case '1M':
-        rangeClause = "WHERE DATE(sale_date) >= DATE('now','-30 days')";
-        break;
-      case '3M':
-        rangeClause = "WHERE DATE(sale_date) >= DATE('now','-90 days')";
-        break;
-      case '6M':
-        rangeClause = "WHERE DATE(sale_date) >= DATE('now','-6 months')";
-        break;
-      case '1Y':
-      default:
-        rangeClause = "WHERE DATE(sale_date) >= DATE('now','-365 days')";
-        break;
-    }
-
-    const baseQuery = `
-      SELECT
-        COUNT(*) as total_sales,
-        SUM(total) as total_revenue,
-        SUM(buying_price * quantity) as total_purchase,
-        SUM(profit) as total_profit,
-        SUM(quantity) as total_items_sold
-      FROM sales
-      ${rangeClause}
-    `;
-
-    const summary = req.user.role === 'admin'
-      ? db.prepare(baseQuery).get()
-      : db.prepare(`${baseQuery.replace('FROM sales', 'FROM sales WHERE teller_id = ?').replace(rangeClause, rangeClause.replace('WHERE', 'AND'))}`).get(req.user.id);
-
-    res.json(summary || {
-      total_sales: 0,
-      total_revenue: 0,
-      total_purchase: 0,
-      total_profit: 0,
-      total_items_sold: 0
-    });
-  } catch (error) {
-    console.error('Get range summary error:', error);
-    res.status(500).json({ error: 'Server error' });
-  }
-};
-
-const getSalesTrend = (req, res) => {
-  try {
-    const range = (req.query.range || '1Y').toUpperCase();
-    const monthNames = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    
-    let dateFilter = '';
-    let periodExpr = '';
-    let labelExpr = '';
-    let tellerFilter = '';
-
-    if (req.user.role !== 'admin') {
-      tellerFilter = ` AND teller_id = ${req.user.id}`;
-    }
-
-    switch (range) {
-      case '1D':
-        dateFilter = "WHERE sale_date >= datetime('now','-1 day')";
-        periodExpr = "strftime('%H', sale_date)";
-        labelExpr = "strftime('%H:00', sale_date)";
-        break;
-      case '1W':
-        dateFilter = "WHERE DATE(sale_date) >= DATE('now','-6 days')";
-        periodExpr = "DATE(sale_date)";
-        labelExpr = "strftime('%Y-%m-%d', sale_date)";
-        break;
-      case '1M':
-        dateFilter = "WHERE DATE(sale_date) >= DATE('now','-30 days')";
-        periodExpr = "strftime('%Y-%m-%d', sale_date)";
-        labelExpr = "strftime('%d', sale_date)";
-        break;
-      case '3M':
-      case '6M':
-      case '1Y':
-      default:
-        if (range === '3M') {
-          dateFilter = "WHERE DATE(sale_date) >= DATE('now','-90 days')";
-        } else if (range === '6M') {
-          dateFilter = "WHERE DATE(sale_date) >= DATE('now','-6 months')";
-        } else {
-          dateFilter = "WHERE DATE(sale_date) >= DATE('now','-365 days')";
-        }
-        periodExpr = "strftime('%Y-%m', sale_date)";
-        labelExpr = "strftime('%m', sale_date)";
-        break;
-    }
-
-    const selectedQuery = `
-      SELECT
-        ${labelExpr} AS label,
-        SUM(total) AS sales,
-        SUM(buying_price * quantity) AS purchase
-      FROM sales
-      ${dateFilter}${tellerFilter}
-      GROUP BY ${periodExpr}
-      ORDER BY ${periodExpr}
-    `;
-
-    const trend = db.prepare(selectedQuery).all();
-
-    // Post-process labels based on range
-    res.json(trend.map((row, idx) => {
-      let processedLabel = row.label;
-      if (range === '3M' || range === '6M' || range === '1Y') {
-        const monthNum = parseInt(row.label);
-        processedLabel = monthNames[monthNum] || row.label;
-      } else if (range === '1W') {
-        const date = new Date(row.label + 'T00:00:00');
-        processedLabel = dayNames[date.getDay()] || row.label;
+    const summary = await orderService.getDailySummary(resolveTenantId(req), req.user);
+    res.json(
+      summary || {
+        date: new Date().toISOString().split('T')[0],
+        total_sales: 0,
+        total_revenue: 0,
+        total_profit: 0,
+        total_items_sold: 0,
       }
-      return {
-        label: processedLabel,
-        sales: row.sales || 0,
-        purchase: row.purchase || 0
-      };
-    }));
+    );
   } catch (error) {
-    console.error('Get sales trend error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const getWeeklySummary = async (req, res) => {
+  try {
+    const summary = await orderService.getWeeklySummary(resolveTenantId(req), req.user);
+    res.json(summary || { total_sales: 0, total_revenue: 0, total_profit: 0, total_items_sold: 0 });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const getMonthlySummary = async (req, res) => {
+  try {
+    const summary = await orderService.getMonthlySummary(resolveTenantId(req), req.user);
+    res.json(summary || { total_sales: 0, total_revenue: 0, total_profit: 0, total_items_sold: 0 });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const getOverallSummary = async (req, res) => {
+  try {
+    const summary = await orderService.getOverallSummary(resolveTenantId(req));
+    res.json(summary || { total_sales: 0, total_revenue: 0, total_profit: 0, total_items_sold: 0 });
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const getSummaryByRange = async (req, res) => {
+  try {
+    const range = (req.query.range || '1Y').toUpperCase();
+    const summary = await orderService.getSummaryByRange(resolveTenantId(req), range);
+    res.json(
+      summary || {
+        total_sales: 0,
+        total_revenue: 0,
+        total_purchase: 0,
+        total_profit: 0,
+        total_items_sold: 0,
+      }
+    );
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const getSalesTrend = async (req, res) => {
+  try {
+    const range = (req.query.range || '1Y').toUpperCase();
+    const trend = await orderService.getSalesTrend(resolveTenantId(req), range);
+    res.json(trend);
+  } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -623,5 +181,5 @@ module.exports = {
   getMonthlySummary,
   getOverallSummary,
   getSummaryByRange,
-  getSalesTrend
+  getSalesTrend,
 };

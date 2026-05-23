@@ -2,26 +2,37 @@ const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const userController = require('../controllers/userController');
-const { authenticate, requireAdmin } = require('../middleware/auth');
+const { authenticate, requireTenantAdmin } = require('../middleware/auth');
 const validate = require('../middleware/validate');
+const { ROLES } = require('../config/permissions');
 
-// All routes require admin authentication
-router.use(authenticate, requireAdmin);
+router.use(authenticate, requireTenantAdmin);
 
-// Get all users
 router.get('/', userController.getAllUsers);
 
-// Create new user
-router.post('/', [
-  body('username').notEmpty().trim(),
-  body('password').isLength({ min: 6 }),
-  body('role').isIn(['admin', 'teller'])
-], validate, userController.createUser);
+router.post(
+  '/',
+  [
+    body('username').notEmpty().trim(),
+    body('password').isLength({ min: 8 }),
+    body('role').isIn([
+      ROLES.MANAGER,
+      ROLES.TELLER,
+      ROLES.INVENTORY,
+      ROLES.ACCOUNTANT,
+      'manager',
+      'teller',
+      'inventory',
+      'accountant',
+    ]),
+    body('email').optional().isEmail(),
+    body('pin').optional().isLength({ min: 4, max: 8 }),
+  ],
+  validate,
+  userController.createUser
+);
 
-// Update user
 router.put('/:id', userController.updateUser);
-
-// Delete user
 router.delete('/:id', userController.deleteUser);
 
 module.exports = router;
