@@ -3,12 +3,15 @@ const bcrypt = require('bcryptjs');
 const { getDynamoClient } = require('../../config/dynamodb');
 const databaseConfig = require('../../config/dataStore');
 const { tenantPk } = require('../../utils/tenant');
+const {
+  PLATFORM_INDEX_PK,
+  PLATFORM_INDEX_PKS,
+} = require('../../utils/platformKeys');
 const authConfig = require('../../config/auth');
 const { ROLES, normalizeRole } = require('../../config/permissions');
 const authDynamo = require('./authDynamoRepository');
 const ENTITY = require('../entityTypes');
 
-const PLATFORM_PK = 'PLATFORM#0';
 const META_SK = 'METADATA';
 const TRIAL_SK = 'TRIAL';
 const SUBSCRIPTION_SK = 'SUBSCRIPTION';
@@ -31,7 +34,7 @@ class PlatformDynamoRepository {
       new PutCommand({
         TableName: this.tableName,
         Item: {
-          PK: PLATFORM_PK,
+          PK: PLATFORM_INDEX_PK,
           SK: `TENANT_REF#${tenantId}`,
           entityType: 'TENANT_REF',
           tenantId: String(tenantId),
@@ -51,18 +54,73 @@ class PlatformDynamoRepository {
     return users.length;
   }
 
-  async listTenants() {
+  async _queryIndexPrefix(pk, skPrefix) {
     const result = await this.client.send(
       new QueryCommand({
         TableName: this.tableName,
         KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-        ExpressionAttributeValues: { ':pk': PLATFORM_PK, ':sk': 'TENANT_REF#' },
+        ExpressionAttributeValues: { ':pk': pk, ':sk': skPrefix },
       })
     );
-    const refs = result.Items || [];
+    return result.Items || [];
+  }
+
+  async _collectTenantRefs() {
+    const byId = new Map();
+    for (const pk of PLATFORM_INDEX_PKS) {
+      const items = await this._queryIndexPrefix(pk, 'TENANT_REF#');
+      items.forEach((ref) => {
+        if (ref.tenantId != null) {
+          byId.set(String(ref.tenantId), ref);
+        }
+      });
+    }
+    return byId;
+  }
+
+  async _discoverTenantIdsFromSlugLookups() {
+    const ids = new Set();
+    for (const pk of PLATFORM_INDEX_PKS) {
+      const items = await this._queryIndexPrefix(pk, 'LOOKUP#SLUG#');
+      items.forEach((item) => {
+        if (item.tenantId != null) ids.add(String(item.tenantId));
+      });
+    }
+    return ids;
+  }
+
+  async _ensureTenantRefOnPlatformIndex(tenantId, ref, meta) {
+    const existing = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { PK: PLATFORM_INDEX_PK, SK: `TENANT_REF#${tenantId}` },
+      })
+    );
+    if (existing.Item) return;
+    await this._tenantRefPut(
+      tenantId,
+      meta?.name || ref?.name || 'Store',
+      meta?.slug || ref?.slug || tenantId,
+      ref?.status || meta?.status || 'active'
+    );
+  }
+
+  async listTenants() {
+    const refMap = await this._collectTenantRefs();
+    const discoveredIds = await this._discoverTenantIdsFromSlugLookups();
+    discoveredIds.forEach((tenantId) => {
+      if (!refMap.has(tenantId)) {
+        refMap.set(tenantId, {
+          tenantId,
+          name: null,
+          slug: null,
+          status: 'active',
+        });
+      }
+    });
+
     const tenants = await Promise.all(
-      refs.map(async (ref) => {
-        const tenantId = ref.tenantId;
+      [...refMap.entries()].map(async ([tenantId, ref]) => {
         const meta = await this.client.send(
           new GetCommand({
             TableName: this.tableName,
@@ -81,6 +139,10 @@ class PlatformDynamoRepository {
             Key: { PK: tenantPk(tenantId), SK: TRIAL_SK },
           })
         );
+        if (meta.Item) {
+          await this._ensureTenantRefOnPlatformIndex(tenantId, ref, meta.Item);
+        }
+
         return {
           id: tenantId,
           name: meta.Item?.name || ref.name,
@@ -92,11 +154,13 @@ class PlatformDynamoRepository {
           trial_status: trial.Item?.status,
           trial_ends_at: trial.Item?.ends_at,
           user_count: await this._countUsersForTenant(tenantId),
-          created_at: meta.Item?.createdAt,
+          created_at: meta.Item?.createdAt || ref.createdAt,
         };
       })
     );
-    return tenants.sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)));
+    return tenants
+      .filter((t) => t.name || t.slug)
+      .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
   }
 
   async getTenant(id) {
@@ -260,7 +324,7 @@ class PlatformDynamoRepository {
       new QueryCommand({
         TableName: this.tableName,
         KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-        ExpressionAttributeValues: { ':pk': PLATFORM_PK, ':sk': 'SAAS_PLAN#' },
+        ExpressionAttributeValues: { ':pk': PLATFORM_INDEX_PK, ':sk': 'SAAS_PLAN#' },
       })
     );
     return (result.Items || [])
@@ -287,7 +351,7 @@ class PlatformDynamoRepository {
       new PutCommand({
         TableName: this.tableName,
         Item: {
-          PK: PLATFORM_PK,
+          PK: PLATFORM_INDEX_PK,
           SK: `SAAS_PLAN#${code}`,
           entityType: 'SAAS_PLAN',
           ...plan,
@@ -302,7 +366,7 @@ class PlatformDynamoRepository {
     const existing = await this.client.send(
       new GetCommand({
         TableName: this.tableName,
-        Key: { PK: PLATFORM_PK, SK: `SAAS_PLAN#${code}` },
+        Key: { PK: PLATFORM_INDEX_PK, SK: `SAAS_PLAN#${code}` },
       })
     );
     if (!existing.Item) throw new Error('Plan not found');
@@ -327,15 +391,9 @@ class PlatformDynamoRepository {
   }
 
   async listPlatformUsers() {
-    const refs = await this.client.send(
-      new QueryCommand({
-        TableName: this.tableName,
-        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-        ExpressionAttributeValues: { ':pk': PLATFORM_PK, ':sk': 'TENANT_REF#' },
-      })
-    );
-    const tenantIds = (refs.Items || []).map((r) => r.tenantId);
-    tenantIds.push(String(0));
+    const refMap = await this._collectTenantRefs();
+    const tenantIds = [...refMap.keys()];
+    if (!tenantIds.includes(String(0))) tenantIds.push(String(0));
 
     const allUsers = [];
     for (const tenantId of tenantIds) {
@@ -452,7 +510,7 @@ class PlatformDynamoRepository {
         new PutCommand({
           TableName: this.tableName,
           Item: {
-            PK: PLATFORM_PK,
+            PK: PLATFORM_INDEX_PK,
             SK: `SAAS_PLAN#${plan.code}`,
             entityType: 'SAAS_PLAN',
             ...plan,

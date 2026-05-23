@@ -2,6 +2,10 @@ const { PutCommand, GetCommand, UpdateCommand, QueryCommand } = require('@aws-sd
 const { getDynamoClient } = require('../../config/dynamodb');
 const databaseConfig = require('../../config/dataStore');
 const { tenantPk, entitySk } = require('../../utils/tenant');
+const {
+  PLATFORM_INDEX_PK,
+  PLATFORM_INDEX_PKS,
+} = require('../../utils/platformKeys');
 const { hashToken } = require('../../utils/tokens');
 const authConfig = require('../../config/auth');
 const { ROLES } = require('../../config/permissions');
@@ -38,22 +42,26 @@ class AuthDynamoRepository {
   }
 
   _platformPk() {
-    return tenantPk(PLATFORM_TENANT);
+    return PLATFORM_INDEX_PK;
   }
 
   async _getLookup(type, value) {
-    const res = await this.client.send(
-      new GetCommand({
-        TableName: this.tableName,
-        Key: { PK: this._platformPk(), SK: lookupSk(type, value) },
-      })
-    );
-    return res.Item || null;
+    const sk = lookupSk(type, value);
+    for (const pk of PLATFORM_INDEX_PKS) {
+      const res = await this.client.send(
+        new GetCommand({
+          TableName: this.tableName,
+          Key: { PK: pk, SK: sk },
+        })
+      );
+      if (res.Item) return res.Item;
+    }
+    return null;
   }
 
   async _putLookup(type, value, tenantId, userId = null) {
     const item = {
-      PK: this._platformPk(),
+      PK: PLATFORM_INDEX_PK,
       SK: lookupSk(type, value),
       entityType: 'LOOKUP',
       lookupType: type,
@@ -70,13 +78,17 @@ class AuthDynamoRepository {
   }
 
   async _slugExists(slug) {
-    const item = await this.client.send(
-      new GetCommand({
-        TableName: this.tableName,
-        Key: { PK: this._platformPk(), SK: lookupSk('SLUG', slug) },
-      })
-    );
-    return !!item.Item;
+    const sk = lookupSk('SLUG', slug);
+    for (const pk of PLATFORM_INDEX_PKS) {
+      const item = await this.client.send(
+        new GetCommand({
+          TableName: this.tableName,
+          Key: { PK: pk, SK: sk },
+        })
+      );
+      if (item.Item) return true;
+    }
+    return false;
   }
 
   async uniqueSlug(base) {
@@ -262,7 +274,7 @@ class AuthDynamoRepository {
       new PutCommand({
         TableName: this.tableName,
         Item: {
-          PK: this._platformPk(),
+          PK: PLATFORM_INDEX_PK,
           SK: `TENANT_REF#${tenantId}`,
           entityType: 'TENANT_REF',
           tenantId: String(tenantId),
@@ -389,19 +401,21 @@ class AuthDynamoRepository {
   async _listTenantIds() {
     const ids = new Set([String(databaseConfig.defaultTenantId), String(PLATFORM_TENANT)]);
 
-    const refs = await this.client.send(
-      new QueryCommand({
-        TableName: this.tableName,
-        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
-        ExpressionAttributeValues: {
-          ':pk': this._platformPk(),
-          ':sk': 'TENANT_REF#',
-        },
-      })
-    );
-    (refs.Items || []).forEach((i) => {
-      if (i.tenantId != null) ids.add(String(i.tenantId));
-    });
+    for (const pk of PLATFORM_INDEX_PKS) {
+      const refs = await this.client.send(
+        new QueryCommand({
+          TableName: this.tableName,
+          KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+          ExpressionAttributeValues: {
+            ':pk': pk,
+            ':sk': 'TENANT_REF#',
+          },
+        })
+      );
+      (refs.Items || []).forEach((i) => {
+        if (i.tenantId != null) ids.add(String(i.tenantId));
+      });
+    }
 
     const res = await this.client.send(
       new QueryCommand({
