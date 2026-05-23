@@ -49,7 +49,9 @@ async function assertAccountActive(user, tenantId) {
     return 'Account temporarily locked. Try again later.';
   }
   if (user.role !== ROLES.SUPER_ADMIN) {
-    if (!user.is_active || !user.email_verified_at) {
+    const isActive =
+      user.is_active === 1 || user.is_active === true || user.is_active === '1';
+    if (!isActive || !user.email_verified_at) {
       return 'Please verify your email before signing in.';
     }
     if (tenantId && (await getAuthRepository().isTrialExpired(tenantId))) {
@@ -83,7 +85,7 @@ const register = async (req, res) => {
     }
 
     const passwordHash = await bcrypt.hash(password, authConfig.bcryptRounds);
-    const { userId, trialEndsAt } = await getAuthRepository().registerTenantOwner({
+    const { userId, tenantId, trialEndsAt } = await getAuthRepository().registerTenantOwner({
       businessName,
       fullName,
       email,
@@ -92,7 +94,7 @@ const register = async (req, res) => {
     });
 
     const rawVerifyToken = tokenService.generateSecureToken();
-    await getAuthRepository().createVerificationToken(userId, rawVerifyToken);
+    await getAuthRepository().createVerificationToken(userId, rawVerifyToken, tenantId);
 
     await logAuthEvent({
       tenantId: null,
@@ -312,7 +314,7 @@ const forgotPassword = async (req, res) => {
     const user = await getAuthRepository().findUserByUsernameOrEmail(email);
     if (user && user.email) {
       const rawToken = tokenService.generateSecureToken();
-      await getAuthRepository().createPasswordResetToken(user.id, rawToken);
+      await getAuthRepository().createPasswordResetToken(user.id, rawToken, user.tenant_id);
       const resetUrl = `${process.env.APP_URL || 'http://localhost:3000'}/reset-password?token=${rawToken}`;
       if (authConfig.exposeDevTokens) {
         console.log(`[DEV] Password reset link: ${resetUrl}`);

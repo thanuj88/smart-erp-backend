@@ -258,51 +258,112 @@ class AuthDynamoRepository {
     await this._putLookup('USERNAME', username, tenantId, userId);
     await this._putLookup('EMAIL', email, tenantId, userId);
 
+    await this.client.send(
+      new PutCommand({
+        TableName: this.tableName,
+        Item: {
+          PK: this._platformPk(),
+          SK: `TENANT_REF#${tenantId}`,
+          entityType: 'TENANT_REF',
+          tenantId: String(tenantId),
+          name: businessName || 'My Store',
+          slug,
+          status: 'active',
+          createdAt: new Date().toISOString(),
+        },
+      })
+    );
+
     return { tenantId, branchId, userId, trialEndsAt: endsAt.toISOString() };
   }
 
-  async createVerificationToken(userId, rawToken) {
+  async _resolveTenantIdForUser(userId) {
     const user = await this.findUserWithPassword(userId);
-    const tenantId = user?.tenant_id ?? PLATFORM_TENANT;
+    if (user?.tenant_id != null) return user.tenant_id;
+
+    const tenants = await this._listTenantIds();
+    for (const tid of tenants) {
+      const u = await this.users.getById(tid, userId);
+      if (u && !u.deleted_at) return tid;
+    }
+    return PLATFORM_TENANT;
+  }
+
+  async createVerificationToken(userId, rawToken, tenantIdHint = null) {
+    const tenantId =
+      tenantIdHint != null ? tenantIdHint : await this._resolveTenantIdForUser(userId);
     const expires = new Date();
     expires.setHours(expires.getHours() + authConfig.verificationTokenHours);
     const tokenId = hashToken(rawToken).slice(0, 32);
     await this.verifyTokens.put(tenantId, tokenId, {
-      user_id: userId,
+      user_id: String(userId),
+      tenant_id: String(tenantId),
       token_hash: hashToken(rawToken),
       expires_at: expires.toISOString(),
     });
     return expires;
   }
 
+  async _activateVerifiedUser(userId, tenantIdHint = null) {
+    const userTenantId =
+      tenantIdHint != null ? tenantIdHint : await this._resolveTenantIdForUser(userId);
+    const verifiedAt = new Date().toISOString();
+    await this.users.update(userTenantId, userId, {
+      is_active: 1,
+      email_verified_at: verifiedAt,
+    });
+    return { user_id: userId, tenant_id: userTenantId };
+  }
+
   async consumeVerificationToken(rawToken) {
     const hash = hashToken(rawToken);
     const tenants = await this._listTenantIds();
+    let matchedRow = null;
+    let matchedTenantPk = null;
+
     for (const tenantId of tenants) {
       const tokens = await this.verifyTokens.queryByTenant(tenantId, {
-        filter: (t) => t.token_hash === hash && !t.used_at && new Date(t.expires_at) > new Date(),
+        filter: (t) => t.token_hash === hash,
       });
-      if (tokens.length) {
-        const row = tokens[0];
-        await this.verifyTokens.update(tenantId, row.id, { used_at: new Date().toISOString() });
-        await this.users.update(tenantId, row.user_id, {
-          is_active: 1,
-          email_verified_at: new Date().toISOString(),
-        });
-        return { user_id: row.user_id };
+      const active = tokens.find(
+        (t) => !t.used_at && new Date(t.expires_at) > new Date()
+      );
+      if (active) {
+        matchedRow = active;
+        matchedTenantPk = tenantId;
+        break;
+      }
+      if (!matchedRow && tokens.length) {
+        matchedRow = tokens[0];
+        matchedTenantPk = tenantId;
       }
     }
-    return null;
+
+    if (!matchedRow) return null;
+
+    const userTenantId =
+      matchedRow.tenant_id ??
+      matchedRow.tenantId ??
+      (await this._resolveTenantIdForUser(matchedRow.user_id));
+
+    if (!matchedRow.used_at) {
+      await this.verifyTokens.update(matchedTenantPk, matchedRow.id, {
+        used_at: new Date().toISOString(),
+      });
+    }
+
+    return this._activateVerifiedUser(matchedRow.user_id, userTenantId);
   }
 
-  async createPasswordResetToken(userId, rawToken) {
-    const user = await this.findUserWithPassword(userId);
-    const tenantId = user?.tenant_id ?? PLATFORM_TENANT;
+  async createPasswordResetToken(userId, rawToken, tenantIdHint = null) {
+    const tenantId =
+      tenantIdHint != null ? tenantIdHint : await this._resolveTenantIdForUser(userId);
     const expires = new Date();
     expires.setHours(expires.getHours() + authConfig.resetTokenHours);
     const tokenId = hashToken(rawToken).slice(0, 32);
     await this.resetTokens.put(tenantId, tokenId, {
-      user_id: userId,
+      user_id: String(userId),
+      tenant_id: String(tenantId),
       token_hash: hashToken(rawToken),
       expires_at: expires.toISOString(),
     });
@@ -326,6 +387,22 @@ class AuthDynamoRepository {
   }
 
   async _listTenantIds() {
+    const ids = new Set([String(databaseConfig.defaultTenantId), String(PLATFORM_TENANT)]);
+
+    const refs = await this.client.send(
+      new QueryCommand({
+        TableName: this.tableName,
+        KeyConditionExpression: 'PK = :pk AND begins_with(SK, :sk)',
+        ExpressionAttributeValues: {
+          ':pk': this._platformPk(),
+          ':sk': 'TENANT_REF#',
+        },
+      })
+    );
+    (refs.Items || []).forEach((i) => {
+      if (i.tenantId != null) ids.add(String(i.tenantId));
+    });
+
     const res = await this.client.send(
       new QueryCommand({
         TableName: this.tableName,
@@ -336,7 +413,6 @@ class AuthDynamoRepository {
         },
       })
     );
-    const ids = new Set([databaseConfig.defaultTenantId, String(PLATFORM_TENANT)]);
     (res.Items || []).forEach((i) => ids.add(String(i.tenantId || i.tenant_id)));
     return [...ids];
   }
