@@ -51,19 +51,20 @@ class AuthDynamoRepository {
     return res.Item || null;
   }
 
-  async _putLookup(type, value, tenantId, userId) {
+  async _putLookup(type, value, tenantId, userId = null) {
+    const item = {
+      PK: this._platformPk(),
+      SK: lookupSk(type, value),
+      entityType: 'LOOKUP',
+      lookupType: type,
+      lookupValue: String(value).toLowerCase(),
+      tenantId,
+    };
+    if (userId != null) item.userId = String(userId);
     await this.client.send(
       new PutCommand({
         TableName: this.tableName,
-        Item: {
-          PK: this._platformPk(),
-          SK: lookupSk(type, value),
-          entityType: 'LOOKUP',
-          lookupType: type,
-          lookupValue: String(value).toLowerCase(),
-          tenantId,
-          userId: String(userId),
-        },
+        Item: item,
       })
     );
   }
@@ -97,7 +98,7 @@ class AuthDynamoRepository {
       branch_id: item.branch_id ?? item.branchId,
       username: item.username,
       email: item.email,
-      password: item.password,
+      password: item.password ?? item.password_hash ?? item.passwordHash,
       pin_hash: item.pin_hash ?? item.pinHash,
       full_name: item.full_name ?? item.fullName,
       role: item.role,
@@ -132,10 +133,15 @@ class AuthDynamoRepository {
       });
       return users[0] ? this._normalizeUser(users[0]) : null;
     }
-    return this.findUserWithPassword(ref.userId);
+    return this.findUserWithPassword(ref.userId, ref.tenantId);
   }
 
-  async findUserById(id) {
+  async findUserById(id, tenantIdHint = null) {
+    if (tenantIdHint != null) {
+      const u = await this.users.getById(tenantIdHint, id);
+      if (u && !u.deleted_at) return this._normalizeUser(u);
+      return null;
+    }
     const tenants = [databaseConfig.defaultTenantId, PLATFORM_TENANT];
     for (const t of tenants) {
       const u = await this.users.getById(t, id);
@@ -146,7 +152,11 @@ class AuthDynamoRepository {
     return found ? this._normalizeUser(found) : null;
   }
 
-  async findUserWithPassword(id) {
+  async findUserWithPassword(id, tenantIdHint = null) {
+    if (tenantIdHint != null) {
+      const full = await this.users.getById(tenantIdHint, id);
+      return full && !full.deleted_at ? this._normalizeUser(full) : null;
+    }
     const user = await this.findUserById(id);
     if (!user) return null;
     const tenantId = user.tenant_id ?? PLATFORM_TENANT;
@@ -195,13 +205,7 @@ class AuthDynamoRepository {
       })
     );
 
-    await this.client.send(
-      new PutCommand({
-        TableName: this.tableName,
-        Key: { PK: this._platformPk(), SK: lookupSk('SLUG', slug) },
-        Item: { entityType: 'LOOKUP', tenantId, slug },
-      })
-    );
+    await this._putLookup('SLUG', slug, tenantId, null);
 
     await this.branches.put(tenantId, branchId, {
       name: 'Main Branch',

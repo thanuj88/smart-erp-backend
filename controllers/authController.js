@@ -158,6 +158,10 @@ const login = async (req, res) => {
       return res.status(403).json({ error: blockReason });
     }
 
+    if (!user.password) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
     const isValid = await bcrypt.compare(password, user.password);
     if (!isValid) {
       await getAuthRepository().recordFailedLogin(user.id);
