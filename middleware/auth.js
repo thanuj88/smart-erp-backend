@@ -1,8 +1,6 @@
-const jwt = require('jsonwebtoken');
-const { jwtSecret } = require('../config/config');
-const User = require('../models/User');
+const tokenService = require('../services/tokenService');
+const { normalizeRole, userHasAnyPermission, PERMISSIONS } = require('../config/permissions');
 
-// Verify JWT token
 const authenticate = (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
 
@@ -11,26 +9,59 @@ const authenticate = (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, jwtSecret);
-    req.user = decoded;
+    const decoded = tokenService.verifyAccessToken(token);
+    if (decoded.type && decoded.type !== 'access') {
+      return res.status(401).json({ error: 'Invalid token type' });
+    }
+    req.user = {
+      id: decoded.id || decoded.sub,
+      username: decoded.username,
+      email: decoded.email,
+      role: normalizeRole(decoded.role),
+      tenantId: decoded.tenantId,
+      branchId: decoded.branchId,
+      permissions: decoded.permissions || [],
+      trialEndsAt: decoded.trialEndsAt,
+    };
     next();
   } catch (error) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 };
 
-// Check if user has admin role
+function isAdminUser(user) {
+  return userHasAnyPermission(user?.permissions, [
+    PERMISSIONS.INVENTORY_MANAGE,
+    PERMISSIONS.SETTINGS_MANAGE,
+    PERMISSIONS.USERS_MANAGE,
+    PERMISSIONS.PLATFORM_MANAGE,
+  ]);
+}
+
+function canSellUser(user) {
+  return userHasAnyPermission(user?.permissions, [
+    PERMISSIONS.SALES_CREATE,
+    PERMISSIONS.PLATFORM_MANAGE,
+  ]);
+}
+
 const requireAdmin = (req, res, next) => {
-  if (req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Access denied. Admin role required.' });
+  if (!isAdminUser(req.user)) {
+    return res.status(403).json({ error: 'Access denied. Insufficient permissions.' });
   }
   next();
 };
 
-// Check if user has teller or admin role
 const requireTeller = (req, res, next) => {
-  if (req.user.role !== 'teller' && req.user.role !== 'admin') {
-    return res.status(403).json({ error: 'Access denied. Teller role required.' });
+  if (!canSellUser(req.user)) {
+    return res.status(403).json({ error: 'Access denied. Sales permission required.' });
+  }
+  next();
+};
+
+const requireTenantAdmin = (req, res, next) => {
+  if (!userHasAnyPermission(req.user?.permissions, [PERMISSIONS.USERS_MANAGE, PERMISSIONS.PLATFORM_MANAGE])) {
+    return res.status(403).json({ error: 'Access denied. User management permission required.' });
   }
   next();
 };
@@ -38,5 +69,8 @@ const requireTeller = (req, res, next) => {
 module.exports = {
   authenticate,
   requireAdmin,
-  requireTeller
+  requireTeller,
+  requireTenantAdmin,
+  isAdminUser,
+  canSellUser,
 };
