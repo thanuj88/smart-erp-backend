@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const saleController = require('../controllers/saleController');
-const { authenticate, requireAdmin, requireTeller } = require('../middleware/auth');
+const { authenticate, requireAdmin, requireTeller, requireReportsAccess } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 
 // All routes require authentication
@@ -39,19 +39,19 @@ router.get('/summary', requireTeller, saleController.getSummaryByRange);
 router.get('/summary/trend', requireTeller, saleController.getSalesTrend);
 
 // Get daily summary
-router.get('/summary/daily', requireTeller, saleController.getDailySummary);
+router.get('/summary/daily', requireReportsAccess, saleController.getDailySummary);
 
 // Get weekly summary
-router.get('/summary/weekly', requireTeller, saleController.getWeeklySummary);
+router.get('/summary/weekly', requireReportsAccess, saleController.getWeeklySummary);
 
 // Get monthly summary
-router.get('/summary/monthly', requireTeller, saleController.getMonthlySummary);
+router.get('/summary/monthly', requireReportsAccess, saleController.getMonthlySummary);
 
-// Admin only routes
-router.get('/', requireAdmin, saleController.getAllSales);
+// Sales report routes (admin, teller, or reports:view)
+router.get('/', requireReportsAccess, saleController.getAllSales);
 
-router.get('/date-range', requireAdmin, saleController.getSalesByDateRange);
+router.get('/date-range', requireReportsAccess, saleController.getSalesByDateRange);
 
-router.get('/summary/overall', requireAdmin, saleController.getOverallSummary);
+router.get('/summary/overall', requireReportsAccess, saleController.getOverallSummary);
 
 module.exports = router;
