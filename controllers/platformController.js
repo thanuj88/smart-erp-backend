@@ -80,7 +80,16 @@ const listPlans = async (req, res) => {
 
 const createPlan = async (req, res) => {
   try {
-    const { code, name, description, priceMonthly, maxUsers } = req.body;
+    const {
+      code,
+      name,
+      description,
+      priceMonthly,
+      maxUsers,
+      maxTellers,
+      maxManagers,
+      maxAccountants,
+    } = req.body;
     if (!code || !name) return res.status(400).json({ error: 'code and name are required' });
     const plan = await getPlatformRepository().createPlan({
       code,
@@ -88,6 +97,9 @@ const createPlan = async (req, res) => {
       description,
       priceMonthly,
       maxUsers,
+      maxTellers,
+      maxManagers,
+      maxAccountants,
     });
     res.status(201).json(plan);
   } catch (error) {

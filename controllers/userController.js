@@ -8,6 +8,7 @@ const {
   localPartFromInput,
   buildTenantPrefix,
 } = require('../utils/staffUsername');
+const planQuotaService = require('../services/planQuotaService');
 
 const STAFF_ROLES = [
   ROLES.MANAGER,
@@ -67,6 +68,12 @@ const createUser = async (req, res) => {
       });
     }
 
+    try {
+      await planQuotaService.assertCanAddStaff(tenantId, normalizedRole);
+    } catch (quotaErr) {
+      return res.status(quotaErr.statusCode || 403).json({ error: quotaErr.message });
+    }
+
     const hashedPassword = await bcrypt.hash(password, authConfig.bcryptRounds);
     let pinHash = null;
     if (pin) {
@@ -111,6 +118,11 @@ const updateUser = async (req, res) => {
       const normalizedRole = normalizeRole(role);
       if (normalizedRole === ROLES.SUPER_ADMIN || normalizedRole === ROLES.TENANT_ADMIN) {
         return res.status(400).json({ error: 'Cannot assign admin roles via this endpoint' });
+      }
+      try {
+        await planQuotaService.assertCanAssignRole(user.tenant_id, normalizedRole, user.role);
+      } catch (quotaErr) {
+        return res.status(quotaErr.statusCode || 403).json({ error: quotaErr.message });
       }
     }
 

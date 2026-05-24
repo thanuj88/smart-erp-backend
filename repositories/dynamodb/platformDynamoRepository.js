@@ -17,10 +17,46 @@ const TRIAL_SK = 'TRIAL';
 const SUBSCRIPTION_SK = 'SUBSCRIPTION';
 
 const DEFAULT_PLANS = [
-  { code: 'trial', name: 'Free Trial', description: '14-day trial for new stores', price_monthly: 0, max_users: 5 },
-  { code: 'starter', name: 'Starter', description: 'Small shop plan', price_monthly: 29, max_users: 10 },
-  { code: 'business', name: 'Business', description: 'Growing business plan', price_monthly: 79, max_users: 25 },
-  { code: 'enterprise', name: 'Enterprise', description: 'Unlimited features', price_monthly: 199, max_users: null },
+  {
+    code: 'trial',
+    name: 'Free Trial',
+    description: '14-day trial for new stores',
+    price_monthly: 0,
+    max_users: 5,
+    max_tellers: 2,
+    max_managers: 1,
+    max_accountants: 0,
+  },
+  {
+    code: 'starter',
+    name: 'Starter',
+    description: 'Small shop plan',
+    price_monthly: 29,
+    max_users: 10,
+    max_tellers: 5,
+    max_managers: 2,
+    max_accountants: 1,
+  },
+  {
+    code: 'business',
+    name: 'Business',
+    description: 'Growing business plan',
+    price_monthly: 79,
+    max_users: 25,
+    max_tellers: 15,
+    max_managers: 5,
+    max_accountants: 3,
+  },
+  {
+    code: 'enterprise',
+    name: 'Enterprise',
+    description: 'Unlimited features',
+    price_monthly: 199,
+    max_users: null,
+    max_tellers: null,
+    max_managers: null,
+    max_accountants: null,
+  },
 ];
 
 class PlatformDynamoRepository {
@@ -334,17 +370,52 @@ class PlatformDynamoRepository {
         description: i.description,
         price_monthly: i.price_monthly,
         max_users: i.max_users,
+        max_tellers: i.max_tellers ?? null,
+        max_managers: i.max_managers ?? null,
+        max_accountants: i.max_accountants ?? null,
       }))
       .sort((a, b) => (a.price_monthly || 0) - (b.price_monthly || 0));
   }
 
-  async createPlan({ code, name, description, priceMonthly, maxUsers }) {
+  async getPlanByCode(code) {
+    const res = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { PK: PLATFORM_INDEX_PK, SK: `SAAS_PLAN#${code}` },
+      })
+    );
+    if (!res.Item) return null;
+    return {
+      code: res.Item.code,
+      name: res.Item.name,
+      description: res.Item.description,
+      price_monthly: res.Item.price_monthly,
+      max_users: res.Item.max_users,
+      max_tellers: res.Item.max_tellers ?? null,
+      max_managers: res.Item.max_managers ?? null,
+      max_accountants: res.Item.max_accountants ?? null,
+    };
+  }
+
+  async createPlan({
+    code,
+    name,
+    description,
+    priceMonthly,
+    maxUsers,
+    maxTellers,
+    maxManagers,
+    maxAccountants,
+  }) {
     const plan = {
       code,
       name,
       description: description || null,
       price_monthly: priceMonthly ?? 0,
       max_users: maxUsers ?? null,
+      max_tellers: maxTellers ?? null,
+      max_managers: maxManagers ?? null,
+      max_accountants: maxAccountants ?? null,
       is_active: 1,
     };
     await this.client.send(
@@ -376,6 +447,24 @@ class PlatformDynamoRepository {
       description: data.description ?? existing.Item.description,
       price_monthly: data.priceMonthly ?? data.price_monthly ?? existing.Item.price_monthly,
       max_users: data.maxUsers ?? data.max_users ?? existing.Item.max_users,
+      max_tellers:
+        data.maxTellers !== undefined
+          ? data.maxTellers
+          : data.max_tellers !== undefined
+            ? data.max_tellers
+            : existing.Item.max_tellers,
+      max_managers:
+        data.maxManagers !== undefined
+          ? data.maxManagers
+          : data.max_managers !== undefined
+            ? data.max_managers
+            : existing.Item.max_managers,
+      max_accountants:
+        data.maxAccountants !== undefined
+          ? data.maxAccountants
+          : data.max_accountants !== undefined
+            ? data.max_accountants
+            : existing.Item.max_accountants,
       updatedAt: new Date().toISOString(),
     };
     await this.client.send(
@@ -387,6 +476,9 @@ class PlatformDynamoRepository {
       description: plan.description,
       price_monthly: plan.price_monthly,
       max_users: plan.max_users,
+      max_tellers: plan.max_tellers ?? null,
+      max_managers: plan.max_managers ?? null,
+      max_accountants: plan.max_accountants ?? null,
     };
   }
 
