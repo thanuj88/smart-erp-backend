@@ -91,6 +91,23 @@ class AuthDynamoRepository {
     return false;
   }
 
+  async getTenantMeta(tenantId) {
+    if (tenantId == null || tenantId === '') return null;
+    const res = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { PK: tenantPk(tenantId), SK: META_SK },
+      })
+    );
+    if (!res.Item) return null;
+    return {
+      tenantId: res.Item.tenantId ?? tenantId,
+      name: res.Item.name,
+      slug: res.Item.slug,
+      status: res.Item.status,
+    };
+  }
+
   async uniqueSlug(base) {
     let slug = slugify(base);
     let n = 0;
@@ -474,17 +491,32 @@ class AuthDynamoRepository {
     });
   }
 
+  _matchesPinLoginUser(u, username, branchId) {
+    return (
+      !u.deleted_at &&
+      String(u.username).toLowerCase() === String(username).toLowerCase() &&
+      u.role === ROLES.TELLER &&
+      (u.is_active === 1 || u.is_active === true) &&
+      u.email_verified_at &&
+      u.pin_hash &&
+      (!branchId || !u.branch_id || String(u.branch_id) === String(branchId))
+    );
+  }
+
   async findUserForPinLogin(username, tenantId, branchId) {
+    const normalized = String(username).trim().toLowerCase();
+
+    const ref = await this._getLookup('USERNAME', normalized);
+    if (ref?.userId) {
+      const user = await this.findUserWithPassword(ref.userId, ref.tenantId);
+      if (user && this._matchesPinLoginUser(user, normalized, branchId)) {
+        return this._normalizeUser(user);
+      }
+    }
+
     const tid = tenantId || databaseConfig.defaultTenantId;
     const users = await this.users.queryByTenant(tid, {
-      filter: (u) =>
-        !u.deleted_at &&
-        u.username === username &&
-        u.role === ROLES.TELLER &&
-        u.is_active &&
-        u.email_verified_at &&
-        u.pin_hash &&
-        (!branchId || !u.branch_id || String(u.branch_id) === String(branchId)),
+      filter: (u) => this._matchesPinLoginUser(u, normalized, branchId),
     });
     return users[0] ? this._normalizeUser(users[0]) : null;
   }
@@ -611,14 +643,18 @@ class AuthDynamoRepository {
     const user = await this.findUserWithPassword(id);
     if (!user) return null;
     const tenantId = user.tenant_id ?? PLATFORM_TENANT;
+    const nextUsername = username ?? user.username;
     const data = {
-      username: username ?? user.username,
+      username: nextUsername,
       role: role ?? user.role,
       full_name: fullName ?? user.full_name,
       branch_id: branchId !== undefined ? branchId : user.branch_id,
     };
     if (pinHash !== undefined) data.pin_hash = pinHash;
     await this.users.update(tenantId, id, data);
+    if (username && String(username).toLowerCase() !== String(user.username).toLowerCase()) {
+      await this._putLookup('USERNAME', nextUsername, tenantId, id);
+    }
     return this.findUserById(id);
   }
 
