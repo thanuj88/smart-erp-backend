@@ -80,6 +80,10 @@ class ProductDynamoRepository extends BaseDynamoRepository {
       category_id: data.categoryId ?? data.category_id ?? null,
       tenant_id: tenantId,
     };
+    const imagePath = data.imagePath ?? data.image_path;
+    if (imagePath) {
+      record.image_path = imagePath;
+    }
     await this.put(tenantId, id, record);
     return this.getById(tenantId, id);
   }
@@ -98,6 +102,9 @@ class ProductDynamoRepository extends BaseDynamoRepository {
       category: data.category ?? existing.category,
       category_id: data.categoryId ?? data.category_id ?? existing.category_id,
     };
+    if (data.imagePath !== undefined || data.image_path !== undefined) {
+      merged.image_path = data.imagePath ?? data.image_path ?? null;
+    }
     await super.update(tenantId, id, merged);
     return this.getById(tenantId, id);
   }

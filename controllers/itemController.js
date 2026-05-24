@@ -1,5 +1,6 @@
 const productService = require('../services/productService');
 const { resolveTenantId } = require('../utils/tenant');
+const { saveImage } = require('../utils/saveImage');
 
 const getAllItems = async (req, res) => {
   try {
@@ -46,6 +47,13 @@ const createItem = async (req, res) => {
       quantity,
       category,
       categoryId,
+      imagePath: req.body.image
+        ? saveImage(
+            req.body.image,
+            'products',
+            `product_${Date.now()}${Math.floor(Math.random() * 1000)}.jpg`
+          )
+        : null,
     });
     res.status(201).json(newItem);
   } catch (error) {
@@ -61,6 +69,17 @@ const updateItem = async (req, res) => {
     if (!item) return res.status(404).json({ error: 'Item not found' });
 
     const sellingPrice = req.body.sellingPrice ?? item.selling_price;
+    let imagePath = item.image_path;
+    if (req.body.image) {
+      imagePath = saveImage(
+        req.body.image,
+        'products',
+        `product_${req.params.id}_${Date.now()}.jpg`
+      );
+    } else if (req.body.removeImage) {
+      imagePath = null;
+    }
+
     const updatedItem = await productService.update(tenantId, req.params.id, {
       name: req.body.name ?? item.name,
       description: req.body.description ?? item.description,
@@ -69,6 +88,7 @@ const updateItem = async (req, res) => {
       quantity: req.body.quantity ?? item.quantity,
       category: req.body.category ?? item.category,
       categoryId: req.body.categoryId ?? item.category_id,
+      imagePath,
     });
     res.json(updatedItem);
   } catch (error) {

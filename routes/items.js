@@ -32,6 +32,8 @@ router.post('/', [
   body('quantity').isInt({ min: 0 }),
   body('categoryId').optional({ values: 'falsy' }),
   body('description').optional({ values: 'falsy' }).trim(),
+  body('image').optional({ values: 'falsy' }).isString(),
+  body('removeImage').optional().isBoolean(),
 ], validate, itemController.createItem);
 
 router.put('/:id', requireAdmin, itemController.updateItem);
