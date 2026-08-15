@@ -9,6 +9,7 @@ const {
   getCurrencyByCode,
   parseCurrencyLabel,
 } = require('../config/currency');
+const { DEFAULT_COUNTRY_CODE, getCountry } = require('../utils/phone');
 
 const SETTINGS_SK = 'SETTINGS';
 
@@ -16,6 +17,7 @@ const DEFAULTS = {
   businessName: '',
   currencyCode: DEFAULT_CURRENCY_CODE,
   currencySymbol: getCurrencyByCode(DEFAULT_CURRENCY_CODE).symbol,
+  countryCode: DEFAULT_COUNTRY_CODE,
   taxRate: 0,
   lowStockThreshold: 15,
   receiptFooter: 'Thank you for shopping with us!',
@@ -26,12 +28,18 @@ function normalizeSettings(item, tenantMeta) {
   const preset = getCurrencyByCode(code);
   const symbol =
     item?.currency_symbol || item?.currencySymbol || preset.symbol;
+  const country = getCountry(
+    item?.country_code || item?.countryCode || tenantMeta?.country_code || DEFAULTS.countryCode
+  );
 
   return {
     businessName: item?.business_name || item?.businessName || tenantMeta?.name || '',
     currencyCode: preset.code,
     currencySymbol: symbol,
     currencyLabel: preset.label,
+    countryCode: country.code,
+    countryName: country.name,
+    countryDialCode: country.dialCode,
     taxRate: Number(item?.tax_rate ?? item?.taxRate ?? DEFAULTS.taxRate),
     lowStockThreshold: Number(
       item?.low_stock_threshold ?? item?.lowStockThreshold ?? DEFAULTS.lowStockThreshold
@@ -83,6 +91,11 @@ async function updateForTenant(tenantId, payload) {
     currencySymbol = String(payload.currencySymbol).trim();
   }
 
+  let countryCode = current.countryCode;
+  if (payload.countryCode != null && String(payload.countryCode).trim()) {
+    countryCode = getCountry(String(payload.countryCode).trim()).code;
+  }
+
   const taxRate = payload.taxRate != null ? Number(payload.taxRate) : current.taxRate;
   const lowStockThreshold =
     payload.lowStockThreshold != null
@@ -98,6 +111,7 @@ async function updateForTenant(tenantId, payload) {
       payload.businessName != null ? String(payload.businessName).trim() : current.businessName,
     currency_code: currencyCode,
     currency_symbol: currencySymbol,
+    country_code: countryCode,
     tax_rate: Number.isFinite(taxRate) ? taxRate : 0,
     low_stock_threshold: Number.isFinite(lowStockThreshold) ? lowStockThreshold : DEFAULTS.lowStockThreshold,
     receipt_footer:

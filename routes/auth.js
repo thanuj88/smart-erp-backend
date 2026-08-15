@@ -19,6 +19,8 @@ router.post(
     body('fullName').notEmpty().trim(),
     body('businessName').notEmpty().trim(),
     body('username').optional().trim(),
+    body('country').notEmpty().trim(),
+    body('phone').notEmpty().trim(),
   ],
   validate,
   authController.register

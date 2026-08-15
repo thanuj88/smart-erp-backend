@@ -37,6 +37,7 @@ const updateSettings = async (req, res) => {
       currencyCode: req.body.currencyCode,
       currencyLabel: req.body.currency,
       currencySymbol: req.body.currencySymbol,
+      countryCode: req.body.countryCode,
       taxRate: req.body.taxRate,
       lowStockThreshold: req.body.lowStockThreshold,
       receiptFooter: req.body.receiptFooter,

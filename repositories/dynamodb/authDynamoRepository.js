@@ -213,7 +213,7 @@ class AuthDynamoRepository {
     return new Date(trial.ends_at) < new Date();
   }
 
-  async registerTenantOwner({ businessName, fullName, email, username, passwordHash }) {
+  async registerTenantOwner({ businessName, fullName, email, username, passwordHash, phone, countryCode }) {
     const slug = await this.uniqueSlug(businessName || email);
     const tenantId = `${Date.now()}`;
     const branchId = `${Date.now()}1`;
@@ -283,6 +283,8 @@ class AuthDynamoRepository {
       email,
       password: passwordHash,
       full_name: fullName,
+      phone: phone || null,
+      country_code: countryCode || null,
       role: ROLES.TENANT_ADMIN,
       is_active: 0,
     });

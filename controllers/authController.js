@@ -7,6 +7,7 @@ const tenantSettingsService = require('../services/tenantSettingsService');
 const { logAuthEvent } = require('../services/auditService');
 const tokenService = require('../services/tokenService');
 const { verifyCaptcha } = require('../utils/captcha');
+const { phoneValidationMessage, toE164, getCountry } = require('../utils/phone');
 
 function clientMeta(req) {
   return {
@@ -76,13 +77,19 @@ async function assertAccountActive(user, tenantId) {
 
 const register = async (req, res) => {
   try {
-    const { email, password, fullName, businessName, username, captchaToken } = req.body;
+    const { email, password, fullName, businessName, username, captchaToken, country, phone } = req.body;
 
     if (!email || !password || !fullName || !businessName) {
       return res.status(400).json({ error: 'Email, password, full name, and business name are required' });
     }
     if (password.length < 8) {
       return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    }
+
+    const selectedCountry = getCountry(country);
+    const phoneError = phoneValidationMessage(phone, selectedCountry.code);
+    if (phoneError) {
+      return res.status(400).json({ error: phoneError });
     }
 
     const captchaOk = await verifyCaptcha(captchaToken);
@@ -104,6 +111,13 @@ const register = async (req, res) => {
       email,
       username: loginName,
       passwordHash,
+      phone: toE164(phone, selectedCountry.code),
+      countryCode: selectedCountry.code,
+    });
+
+    await tenantSettingsService.updateForTenant(tenantId, {
+      businessName,
+      countryCode: selectedCountry.code,
     });
 
     const rawVerifyToken = tokenService.generateSecureToken();
