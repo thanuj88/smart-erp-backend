@@ -41,6 +41,8 @@ const updateSettings = async (req, res) => {
       taxRate: req.body.taxRate,
       lowStockThreshold: req.body.lowStockThreshold,
       receiptFooter: req.body.receiptFooter,
+      receipt: req.body.receipt,
+      removeReceiptLogo: req.body.removeReceiptLogo,
     });
 
     res.json(settings);

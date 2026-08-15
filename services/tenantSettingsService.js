@@ -10,6 +10,7 @@ const {
   parseCurrencyLabel,
 } = require('../config/currency');
 const { DEFAULT_COUNTRY_CODE, getCountry } = require('../utils/phone');
+const { DEFAULT_RECEIPT, normalizeReceipt, mergeReceipt, saveReceiptLogo } = require('../config/receipt');
 
 const SETTINGS_SK = 'SETTINGS';
 
@@ -20,7 +21,7 @@ const DEFAULTS = {
   countryCode: DEFAULT_COUNTRY_CODE,
   taxRate: 0,
   lowStockThreshold: 15,
-  receiptFooter: 'Thank you for shopping with us!',
+  receiptFooter: DEFAULT_RECEIPT.footer,
 };
 
 function normalizeSettings(item, tenantMeta) {
@@ -30,6 +31,10 @@ function normalizeSettings(item, tenantMeta) {
     item?.currency_symbol || item?.currencySymbol || preset.symbol;
   const country = getCountry(
     item?.country_code || item?.countryCode || tenantMeta?.country_code || DEFAULTS.countryCode
+  );
+  const receipt = normalizeReceipt(
+    item?.receipt,
+    item?.receipt_footer || item?.receiptFooter || DEFAULTS.receiptFooter
   );
 
   return {
@@ -44,7 +49,8 @@ function normalizeSettings(item, tenantMeta) {
     lowStockThreshold: Number(
       item?.low_stock_threshold ?? item?.lowStockThreshold ?? DEFAULTS.lowStockThreshold
     ),
-    receiptFooter: item?.receipt_footer || item?.receiptFooter || DEFAULTS.receiptFooter,
+    receipt,
+    receiptFooter: receipt.footer,
     currency: { code: preset.code, symbol },
   };
 }
@@ -102,6 +108,15 @@ async function updateForTenant(tenantId, payload) {
       ? Number(payload.lowStockThreshold)
       : current.lowStockThreshold;
 
+  const receipt = mergeReceipt(current.receipt || DEFAULT_RECEIPT, payload);
+  if (payload.removeReceiptLogo) {
+    receipt.logo = null;
+  } else if (payload.receipt?.logo && String(payload.receipt.logo).startsWith('data:')) {
+    receipt.logo = saveReceiptLogo(payload.receipt.logo, tenantId);
+  } else {
+    receipt.logo = current.receipt?.logo || null;
+  }
+
   const item = {
     PK: tenantPk(tenantId),
     SK: SETTINGS_SK,
@@ -114,8 +129,8 @@ async function updateForTenant(tenantId, payload) {
     country_code: countryCode,
     tax_rate: Number.isFinite(taxRate) ? taxRate : 0,
     low_stock_threshold: Number.isFinite(lowStockThreshold) ? lowStockThreshold : DEFAULTS.lowStockThreshold,
-    receipt_footer:
-      payload.receiptFooter != null ? String(payload.receiptFooter) : current.receiptFooter,
+    receipt,
+    receipt_footer: receipt.footer,
     updatedAt: new Date().toISOString(),
   };
 

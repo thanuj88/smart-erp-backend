@@ -39,7 +39,15 @@ app.use('/api/installment-payments', require('./routes/installmentPayments'));
 app.use('/api/platform', require('./routes/platform'));
 app.use('/api/settings', require('./routes/settings'));
 
-app.use('/uploads', express.static('uploads'));
+app.use(
+  '/uploads',
+  (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    next();
+  },
+  express.static('uploads')
+);
 
 app.get('/api/health', (req, res) => {
   res.json({
