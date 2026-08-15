@@ -25,11 +25,12 @@ function isValidNic(value) {
 const NIC_FORMAT_MESSAGE =
   'Enter a valid NIC (901234567V / 901234567X, or 12 digits e.g. 199012345678)';
 
-function validateNicNumbers(customer, witness) {
+function validateNicNumbers(customer, witness, { requireWitness = true } = {}) {
   const customerNic = customer?.idCardNo ?? customer?.id_card_no;
-  const witnessNic = witness?.idCardNo ?? witness?.id_card_no;
   if (!normalizeNic(customerNic)) return 'Customer NIC is required';
   if (!isValidNic(customerNic)) return `Customer: ${NIC_FORMAT_MESSAGE}`;
+  if (!requireWitness) return null;
+  const witnessNic = witness?.idCardNo ?? witness?.id_card_no;
   if (!normalizeNic(witnessNic)) return 'Witness NIC is required';
   if (!isValidNic(witnessNic)) return `Witness: ${NIC_FORMAT_MESSAGE}`;
   return null;

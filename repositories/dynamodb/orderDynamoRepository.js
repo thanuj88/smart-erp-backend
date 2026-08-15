@@ -116,9 +116,12 @@ class OrderDynamoRepository extends BaseDynamoRepository {
 
   async processInstallmentSale(tenantId, user, payload, saveImage) {
     const { itemId, quantity, customer, witness, downPayment, installmentMonths } = payload;
-    const witnessError = validateDistinctCustomerAndWitness(customer, witness);
-    if (witnessError) {
-      throw Object.assign(new Error(witnessError), { status: 400 });
+    const includeWitness = payload.includeWitness !== false && Boolean(witness);
+    if (includeWitness) {
+      const witnessError = validateDistinctCustomerAndWitness(customer, witness);
+      if (witnessError) {
+        throw Object.assign(new Error(witnessError), { status: 400 });
+      }
     }
 
     const item = await productDynamoRepository.getById(tenantId, itemId);
@@ -160,17 +163,20 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       customerId = created.id;
     }
 
-    let witnessIdImage = null;
-    if (witness.idImage) {
-      const witnessFilename = `witness_${Date.now()}_${witness.idCardNo}.jpg`;
-      witnessIdImage = saveImage(witness.idImage, 'witnesses', witnessFilename);
-    }
+    let witnessId = null;
+    if (includeWitness && witness) {
+      let witnessIdImage = null;
+      if (witness.idImage) {
+        const witnessFilename = `witness_${Date.now()}_${witness.idCardNo}.jpg`;
+        witnessIdImage = saveImage(witness.idImage, 'witnesses', witnessFilename);
+      }
 
-    const createdWitness = await witnessDynamoRepository.create(tenantId, {
-      ...witness,
-      idImagePath: witnessIdImage,
-    });
-    const witnessId = createdWitness.id;
+      const createdWitness = await witnessDynamoRepository.create(tenantId, {
+        ...witness,
+        idImagePath: witnessIdImage,
+      });
+      witnessId = createdWitness.id;
+    }
 
     const saleId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const saleDate = new Date().toISOString();

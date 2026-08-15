@@ -21,7 +21,8 @@ router.post('/installment', [
   body('itemId').isInt(),
   body('quantity').isInt({ min: 1 }),
   body('customer').isObject(),
-  body('witness').isObject(),
+  body('includeWitness').optional().isBoolean(),
+  body('witness').optional({ nullable: true }).isObject(),
   body('downPayment').isFloat({ min: 0 }),
   body('installmentMonths').isInt().isIn([3, 6, 12])
 ], validate, saleController.processInstallmentSale);

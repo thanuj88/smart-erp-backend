@@ -41,16 +41,22 @@ const processCashSale = async (req, res) => {
 const processInstallmentSale = async (req, res) => {
   try {
     const { itemId, quantity, customer, witness, downPayment, installmentMonths } = req.body;
-    if (!itemId || !quantity || !customer || !witness || downPayment === undefined || !installmentMonths) {
+    const includeWitness = req.body.includeWitness !== false;
+    if (!itemId || !quantity || !customer || downPayment === undefined || !installmentMonths) {
       return res.status(400).json({ error: 'All fields are required for installment sale' });
     }
-    const nicError = validateNicNumbers(customer, witness);
+    if (includeWitness && (!witness || typeof witness !== 'object')) {
+      return res.status(400).json({ error: 'Witness details are required' });
+    }
+    const nicError = validateNicNumbers(customer, witness, { requireWitness: includeWitness });
     if (nicError) {
       return res.status(400).json({ error: nicError });
     }
-    const witnessError = validateDistinctCustomerAndWitness(customer, witness);
-    if (witnessError) {
-      return res.status(400).json({ error: witnessError });
+    if (includeWitness) {
+      const witnessError = validateDistinctCustomerAndWitness(customer, witness);
+      if (witnessError) {
+        return res.status(400).json({ error: witnessError });
+      }
     }
     const result = await orderService.processInstallmentSale(
       resolveTenantId(req),
@@ -59,7 +65,10 @@ const processInstallmentSale = async (req, res) => {
         itemId,
         quantity,
         customer: { ...customer, idCardNo: normalizeNic(customer.idCardNo ?? customer.id_card_no) },
-        witness: { ...witness, idCardNo: normalizeNic(witness.idCardNo ?? witness.id_card_no) },
+        witness: includeWitness
+          ? { ...witness, idCardNo: normalizeNic(witness.idCardNo ?? witness.id_card_no) }
+          : null,
+        includeWitness,
         downPayment,
         installmentMonths,
       },
