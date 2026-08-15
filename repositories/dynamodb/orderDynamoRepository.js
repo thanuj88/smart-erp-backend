@@ -223,6 +223,51 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     return { sale, plan, payments };
   }
 
+  _isCashSale(sale) {
+    return (sale.payment_type || 'cash') === 'cash';
+  }
+
+  async _buildIncomeSummary(tenantId, dateFilter, tellerId, isAdmin = true) {
+    const [allSales, plans, payments] = await Promise.all([
+      this.getAll(tenantId),
+      installmentPlanDynamoRepository.queryByTenant(tenantId),
+      installmentPaymentDynamoRepository.getAll(tenantId),
+    ]);
+
+    const matchesTeller = (sale) => isAdmin || String(sale.teller_id) === String(tellerId);
+    const salesInPeriod = allSales.filter((s) => dateFilter(s.sale_date) && matchesTeller(s));
+    const cashSales = salesInPeriod.filter((s) => this._isCashSale(s));
+    const tellerSaleIds = new Set(allSales.filter(matchesTeller).map((s) => String(s.id)));
+
+    const downPaymentIncome = plans.reduce((sum, plan) => {
+      if (!dateFilter(plan.created_at || plan.createdAt)) return sum;
+      if (!isAdmin && !tellerSaleIds.has(String(plan.sale_id))) return sum;
+      return sum + (Number(plan.down_payment) || 0);
+    }, 0);
+
+    const planById = new Map(plans.map((p) => [String(p.id), p]));
+    const installmentIncome = payments.reduce((sum, payment) => {
+      if (payment.status !== 'paid' || !dateFilter(payment.paid_date)) return sum;
+      if (!isAdmin) {
+        const plan = planById.get(String(payment.installment_plan_id));
+        if (!plan || !tellerSaleIds.has(String(plan.sale_id))) return sum;
+      }
+      return sum + (Number(payment.amount_paid) || 0);
+    }, 0);
+
+    const cashRevenue = cashSales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0);
+
+    return {
+      total_sales: cashSales.length,
+      total_revenue: cashRevenue,
+      total_items_sold: salesInPeriod.reduce((sum, sale) => sum + (sale.quantity || 0), 0),
+      total_profit: cashSales.reduce((sum, sale) => sum + (Number(sale.profit) || 0), 0),
+      down_payment_income: downPaymentIncome,
+      installment_income: installmentIncome,
+      total_actual_income: cashRevenue + downPaymentIncome + installmentIncome,
+    };
+  }
+
   async getTopProducts(tenantId, range, limit) {
     const all = await this.getAll(tenantId);
     const filtered = all.filter((s) => this._inRange(s.sale_date, range));
@@ -239,63 +284,23 @@ class OrderDynamoRepository extends BaseDynamoRepository {
   }
 
   async getDailySummary(tenantId, tellerId, isAdmin) {
-    const all = await this.getAll(tenantId);
-    const today = all.filter(
-      (s) => this._today(s.sale_date) && (isAdmin || String(s.teller_id) === String(tellerId))
-    );
-    return {
-      total_sales: today.length,
-      total_revenue: today.reduce((s, r) => s + (r.total || 0), 0),
-      total_items_sold: today.reduce((s, r) => s + (r.quantity || 0), 0),
-      total_profit: today.reduce((s, r) => s + (r.profit || 0), 0),
-    };
+    return this._buildIncomeSummary(tenantId, (d) => this._today(d), tellerId, isAdmin);
   }
 
   async getWeeklySummary(tenantId, tellerId, isAdmin) {
-    const all = await this.getAll(tenantId);
-    const filtered = all.filter(
-      (s) => this._inRange(s.sale_date, 'week') && (isAdmin || String(s.teller_id) === String(tellerId))
-    );
-    return {
-      total_sales: filtered.length,
-      total_revenue: filtered.reduce((s, r) => s + (r.total || 0), 0),
-      total_items_sold: filtered.reduce((s, r) => s + (r.quantity || 0), 0),
-      total_profit: filtered.reduce((s, r) => s + (r.profit || 0), 0),
-    };
+    return this._buildIncomeSummary(tenantId, (d) => this._inRange(d, 'week'), tellerId, isAdmin);
   }
 
   async getMonthlySummary(tenantId, tellerId, isAdmin) {
-    const all = await this.getAll(tenantId);
-    const filtered = all.filter(
-      (s) => this._inRange(s.sale_date, 'month') && (isAdmin || String(s.teller_id) === String(tellerId))
-    );
-    return {
-      total_sales: filtered.length,
-      total_revenue: filtered.reduce((s, r) => s + (r.total || 0), 0),
-      total_items_sold: filtered.reduce((s, r) => s + (r.quantity || 0), 0),
-      total_profit: filtered.reduce((s, r) => s + (r.profit || 0), 0),
-    };
+    return this._buildIncomeSummary(tenantId, (d) => this._inRange(d, 'month'), tellerId, isAdmin);
   }
 
   async getOverallSummary(tenantId) {
-    const all = await this.getAll(tenantId);
-    return {
-      total_sales: all.length,
-      total_revenue: all.reduce((s, r) => s + (r.total || 0), 0),
-      total_items_sold: all.reduce((s, r) => s + (r.quantity || 0), 0),
-      total_profit: all.reduce((s, r) => s + (r.profit || 0), 0),
-    };
+    return this._buildIncomeSummary(tenantId, () => true, null, true);
   }
 
   async getSummaryByRange(tenantId, range) {
-    const all = await this.getAll(tenantId);
-    const filtered = all.filter((s) => this._inRange(s.sale_date, range));
-    return {
-      total_sales: filtered.length,
-      total_revenue: filtered.reduce((s, r) => s + (r.total || 0), 0),
-      total_profit: filtered.reduce((s, r) => s + (r.profit || 0), 0),
-      total_items_sold: filtered.reduce((s, r) => s + (r.quantity || 0), 0),
-    };
+    return this._buildIncomeSummary(tenantId, (d) => this._inRange(d, range), null, true);
   }
 
   async getSalesTrend(tenantId, range) {
