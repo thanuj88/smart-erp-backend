@@ -8,7 +8,7 @@ const {
   localPartFromInput,
   buildTenantPrefix,
 } = require('../utils/staffUsername');
-const planQuotaService = require('../services/planQuotaService');
+const staffUserService = require('../services/staffUserService');
 
 const STAFF_ROLES = [
   ROLES.MANAGER,
@@ -48,30 +48,15 @@ const createUser = async (req, res) => {
       });
     }
 
-    const tenantMeta = await repo.getTenantMeta(tenantId);
-    if (!tenantMeta) {
-      return res.status(400).json({ error: 'Store not found' });
-    }
-
     let finalUsername;
     try {
-      finalUsername = buildStaffUsername(tenantMeta, localPartFromInput(tenantMeta, username));
+      ({ finalUsername } = await staffUserService.prepareStaffUserCreate({
+        tenantId,
+        username,
+        role: normalizedRole,
+      }));
     } catch (err) {
-      return res.status(400).json({ error: err.message || 'Invalid username' });
-    }
-
-    const existing = await repo.findUserByUsernameOrEmail(finalUsername, null);
-    if (existing) {
-      const prefix = buildTenantPrefix(tenantMeta);
-      return res.status(400).json({
-        error: `Username already taken. Use a different name after "${prefix}-"`,
-      });
-    }
-
-    try {
-      await planQuotaService.assertCanAddStaff(tenantId, normalizedRole);
-    } catch (quotaErr) {
-      return res.status(quotaErr.statusCode || 403).json({ error: quotaErr.message });
+      return res.status(err.statusCode || 400).json({ error: err.message });
     }
 
     const hashedPassword = await bcrypt.hash(password, authConfig.bcryptRounds);
@@ -120,7 +105,7 @@ const updateUser = async (req, res) => {
         return res.status(400).json({ error: 'Cannot assign admin roles via this endpoint' });
       }
       try {
-        await planQuotaService.assertCanAssignRole(user.tenant_id, normalizedRole, user.role);
+        await staffUserService.assertStaffRoleChange(user.tenant_id, normalizedRole, user.role);
       } catch (quotaErr) {
         return res.status(quotaErr.statusCode || 403).json({ error: quotaErr.message });
       }

@@ -3,6 +3,7 @@ const { getAuthRepository } = require('../repositories/factory');
 const authConfig = require('../config/auth');
 const { ROLES, normalizeRole } = require('../config/permissions');
 const permissionService = require('../services/permissionService');
+const tenantSettingsService = require('../services/tenantSettingsService');
 const { logAuthEvent } = require('../services/auditService');
 const tokenService = require('../services/tokenService');
 const { verifyCaptcha } = require('../utils/captcha');
@@ -20,9 +21,13 @@ async function formatUserResponse(user, trialEndsAt) {
   const role = normalizeRole(user.role);
   const permissions = await permissionService.getPermissionsForRole(role);
   let tenantSlug = null;
+  let tenantSettings = null;
+  let currency = null;
   if (user.tenant_id) {
     const meta = await getAuthRepository().getTenantMeta(user.tenant_id);
     tenantSlug = meta?.slug || null;
+    tenantSettings = await tenantSettingsService.getForTenant(user.tenant_id);
+    currency = tenantSettings.currency;
   }
   return {
     id: user.id,
@@ -35,6 +40,8 @@ async function formatUserResponse(user, trialEndsAt) {
     branchId: user.branch_id,
     permissions,
     trialEndsAt: trialEndsAt || null,
+    currency,
+    tenantSettings,
   };
 }
 
@@ -378,7 +385,7 @@ const resetPassword = async (req, res) => {
 
 const getProfile = async (req, res) => {
   try {
-    const user = await getAuthRepository().findUserById(req.user.id);
+    const user = await getAuthRepository().findUserById(req.user.id, req.user.tenantId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
@@ -400,7 +407,7 @@ const changePassword = async (req, res) => {
       return res.status(400).json({ error: 'New password must be at least 8 characters' });
     }
 
-    const user = await getAuthRepository().findUserWithPassword(req.user.id);
+    const user = await getAuthRepository().findUserWithPassword(req.user.id, req.user.tenantId);
     const isValid = await bcrypt.compare(currentPassword, user.password);
     if (!isValid) {
       return res.status(401).json({ error: 'Current password is incorrect' });

@@ -3,6 +3,7 @@ const BaseDynamoRepository = require('./baseDynamoRepository');
 const ENTITY = require('../entityTypes');
 const databaseConfig = require('../../config/dataStore');
 const productDynamoRepository = require('./productDynamoRepository');
+const { validateDistinctCustomerAndWitness } = require('../../utils/installmentValidation');
 const customerDynamoRepository = require('./customerDynamoRepository');
 const witnessDynamoRepository = require('./witnessDynamoRepository');
 const installmentPlanDynamoRepository = require('./installmentPlanDynamoRepository');
@@ -115,6 +116,11 @@ class OrderDynamoRepository extends BaseDynamoRepository {
 
   async processInstallmentSale(tenantId, user, payload, saveImage) {
     const { itemId, quantity, customer, witness, downPayment, installmentMonths } = payload;
+    const witnessError = validateDistinctCustomerAndWitness(customer, witness);
+    if (witnessError) {
+      throw Object.assign(new Error(witnessError), { status: 400 });
+    }
+
     const item = await productDynamoRepository.getById(tenantId, itemId);
     if (!item) throw Object.assign(new Error('Item not found'), { status: 404 });
     if ((item.quantity ?? 0) < quantity) {

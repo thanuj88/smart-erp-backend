@@ -37,6 +37,7 @@ app.use('/api/customers', require('./routes/customers'));
 app.use('/api/installment-plans', require('./routes/installmentPlans'));
 app.use('/api/installment-payments', require('./routes/installmentPayments'));
 app.use('/api/platform', require('./routes/platform'));
+app.use('/api/settings', require('./routes/settings'));
 
 app.use('/uploads', express.static('uploads'));
 
@@ -76,10 +77,12 @@ app.use((err, req, res, next) => {
 app.listen(port, () => {
   console.log(`\n🚀 Server running on port ${port}`);
   console.log(`📡 API available at http://localhost:${port}/api`);
-  console.log(`\n📝 Default credentials (after seed):`);
-  console.log(`   Tenant Admin - username: admin, password: admin123`);
-  console.log(`   Teller - username: teller, password: teller123`);
-  console.log(`   Super Admin - username: superadmin, password: superadmin123\n`);
+  console.log(`\n📝 Default credentials (after fresh seed — see backend/DYNAMODB.md):`);
+  console.log(`   Super Admin  - superadmin / superadmin123`);
+  console.log(`   Tenant Admin - admin / admin123`);
+  console.log(`   Teller       - brightmart-teller / teller123 (PIN: 1234)`);
+  console.log(`   Manager      - brightmart-manager / manager123`);
+  console.log(`   Accountant   - brightmart-accountant / accountant123\n`);
 });
 
 module.exports = app;

@@ -2,6 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const orderService = require('../services/orderService');
 const { resolveTenantId } = require('../utils/tenant');
+const { validateDistinctCustomerAndWitness } = require('../utils/installmentValidation');
 
 const saveImage = (base64Data, folder, filename) => {
   if (!base64Data) return null;
@@ -42,6 +43,10 @@ const processInstallmentSale = async (req, res) => {
     const { itemId, quantity, customer, witness, downPayment, installmentMonths } = req.body;
     if (!itemId || !quantity || !customer || !witness || downPayment === undefined || !installmentMonths) {
       return res.status(400).json({ error: 'All fields are required for installment sale' });
+    }
+    const witnessError = validateDistinctCustomerAndWitness(customer, witness);
+    if (witnessError) {
+      return res.status(400).json({ error: witnessError });
     }
     const result = await orderService.processInstallmentSale(
       resolveTenantId(req),

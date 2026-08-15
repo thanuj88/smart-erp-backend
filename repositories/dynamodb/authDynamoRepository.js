@@ -166,19 +166,22 @@ class AuthDynamoRepository {
   }
 
   async findUserById(id, tenantIdHint = null) {
-    if (tenantIdHint != null) {
-      const u = await this.users.getById(tenantIdHint, id);
-      if (u && !u.deleted_at) return this._normalizeUser(u);
-      return null;
+    const tenantIds = [];
+    if (tenantIdHint != null && tenantIdHint !== '') {
+      tenantIds.push(String(tenantIdHint));
     }
-    const tenants = [databaseConfig.defaultTenantId, PLATFORM_TENANT];
-    for (const t of tenants) {
-      const u = await this.users.getById(t, id);
+    tenantIds.push(String(PLATFORM_TENANT));
+    tenantIds.push(String(databaseConfig.defaultTenantId));
+
+    for (const tid of await this._listTenantIds()) {
+      if (!tenantIds.includes(tid)) tenantIds.push(tid);
+    }
+
+    for (const tenantId of tenantIds) {
+      const u = await this.users.getById(tenantId, id);
       if (u && !u.deleted_at) return this._normalizeUser(u);
     }
-    const all = await this.users.queryByTenant(databaseConfig.defaultTenantId);
-    const found = all.find((u) => String(u.id) === String(id) && !u.deleted_at);
-    return found ? this._normalizeUser(found) : null;
+    return null;
   }
 
   async findUserWithPassword(id, tenantIdHint = null) {

@@ -513,13 +513,11 @@ class PlatformDynamoRepository {
     );
   }
 
-  async createPlatformUser({ tenantId, username, email, password, role, fullName, branchId }) {
+  async createPlatformUser({ tenantId, username, email, password, role, fullName, branchId, pinHash }) {
     const normalized = normalizeRole(role);
     if (normalized === ROLES.SUPER_ADMIN && tenantId) {
       throw new Error('Super admin cannot belong to a tenant');
     }
-    const existing = await authDynamo.findUserByUsernameOrEmail(username, tenantId || null);
-    if (existing) throw new Error('Username already exists');
 
     const hash = await bcrypt.hash(password, authConfig.bcryptRounds);
     const tid = tenantId || 0;
@@ -537,6 +535,7 @@ class PlatformDynamoRepository {
       hashedPassword: hash,
       role: normalized,
       fullName: fullName || username,
+      pinHash: pinHash || null,
       isActive: true,
     });
   }
