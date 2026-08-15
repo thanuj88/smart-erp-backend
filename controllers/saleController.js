@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const orderService = require('../services/orderService');
 const { resolveTenantId } = require('../utils/tenant');
-const { validateDistinctCustomerAndWitness } = require('../utils/installmentValidation');
+const { validateDistinctCustomerAndWitness, validateNicNumbers, normalizeNic } = require('../utils/installmentValidation');
 
 const saveImage = (base64Data, folder, filename) => {
   if (!base64Data) return null;
@@ -44,6 +44,10 @@ const processInstallmentSale = async (req, res) => {
     if (!itemId || !quantity || !customer || !witness || downPayment === undefined || !installmentMonths) {
       return res.status(400).json({ error: 'All fields are required for installment sale' });
     }
+    const nicError = validateNicNumbers(customer, witness);
+    if (nicError) {
+      return res.status(400).json({ error: nicError });
+    }
     const witnessError = validateDistinctCustomerAndWitness(customer, witness);
     if (witnessError) {
       return res.status(400).json({ error: witnessError });
@@ -51,7 +55,14 @@ const processInstallmentSale = async (req, res) => {
     const result = await orderService.processInstallmentSale(
       resolveTenantId(req),
       req.user,
-      { itemId, quantity, customer, witness, downPayment, installmentMonths },
+      {
+        itemId,
+        quantity,
+        customer: { ...customer, idCardNo: normalizeNic(customer.idCardNo ?? customer.id_card_no) },
+        witness: { ...witness, idCardNo: normalizeNic(witness.idCardNo ?? witness.id_card_no) },
+        downPayment,
+        installmentMonths,
+      },
       saveImage
     );
     res.status(201).json(result);
