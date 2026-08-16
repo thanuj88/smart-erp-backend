@@ -27,11 +27,15 @@ const handleSaleError = (res, error) => {
 
 const processCashSale = async (req, res) => {
   try {
-    const { itemId, quantity } = req.body;
+    const { itemId, quantity, orderNumber } = req.body;
     if (!itemId || !quantity || quantity <= 0) {
       return res.status(400).json({ error: 'Valid itemId and quantity are required' });
     }
-    const sale = await orderService.processCashSale(resolveTenantId(req), req.user, { itemId, quantity });
+    const sale = await orderService.processCashSale(resolveTenantId(req), req.user, {
+      itemId,
+      quantity,
+      orderNumber,
+    });
     res.status(201).json(sale);
   } catch (error) {
     return handleSaleError(res, error);
@@ -40,7 +44,7 @@ const processCashSale = async (req, res) => {
 
 const processInstallmentSale = async (req, res) => {
   try {
-    const { itemId, quantity, customer, witness, downPayment, installmentMonths } = req.body;
+    const { itemId, quantity, customer, witness, downPayment, installmentMonths, orderNumber } = req.body;
     const includeWitness = req.body.includeWitness !== false;
     if (!itemId || !quantity || !customer || downPayment === undefined || !installmentMonths) {
       return res.status(400).json({ error: 'All fields are required for installment sale' });
@@ -71,6 +75,7 @@ const processInstallmentSale = async (req, res) => {
         includeWitness,
         downPayment,
         installmentMonths,
+        orderNumber,
       },
       saveImage
     );
@@ -103,6 +108,16 @@ const getAllSales = async (req, res) => {
 const getTodaySales = async (req, res) => {
   try {
     const sales = await orderService.getToday(resolveTenantId(req), req.user);
+    res.json(sales);
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const getRecentSales = async (req, res) => {
+  try {
+    const days = Number(req.query.days) || 7;
+    const sales = await orderService.getRecent(resolveTenantId(req), req.user, days);
     res.json(sales);
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -200,6 +215,7 @@ module.exports = {
   getTopProducts,
   getAllSales,
   getTodaySales,
+  getRecentSales,
   getSalesByDateRange,
   getDailySummary,
   getWeeklySummary,

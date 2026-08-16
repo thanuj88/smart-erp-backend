@@ -9,6 +9,7 @@ const witnessDynamoRepository = require('./witnessDynamoRepository');
 const installmentPlanDynamoRepository = require('./installmentPlanDynamoRepository');
 const installmentPaymentDynamoRepository = require('./installmentPaymentDynamoRepository');
 const installmentSettingDynamoRepository = require('./installmentSettingDynamoRepository');
+const { resolveOrderNumber } = require('../../utils/orderId');
 
 class OrderDynamoRepository extends BaseDynamoRepository {
   constructor() {
@@ -46,6 +47,17 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     );
   }
 
+  async getRecent(tenantId, tellerId, isAdmin, days = 7) {
+    const all = await this.getAll(tenantId);
+    const cutoff = new Date();
+    cutoff.setHours(0, 0, 0, 0);
+    cutoff.setDate(cutoff.getDate() - (Math.max(1, Number(days) || 7) - 1));
+    return all.filter((s) => {
+      const d = new Date(s.sale_date);
+      return d >= cutoff && (isAdmin || String(s.teller_id) === String(tellerId));
+    });
+  }
+
   async getByDateRange(tenantId, startDate, endDate) {
     const all = await this.getAll(tenantId);
     const start = new Date(startDate);
@@ -56,7 +68,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     });
   }
 
-  async processCashSale(tenantId, user, { itemId, quantity }) {
+  async processCashSale(tenantId, user, { itemId, quantity, orderNumber }) {
     const item = await productDynamoRepository.getById(tenantId, itemId);
     if (!item) throw Object.assign(new Error('Item not found'), { status: 404 });
     if ((item.quantity ?? 0) < quantity) {
@@ -67,6 +79,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     const total = item.selling_price * quantity;
     const profit = (item.selling_price - item.buying_price) * quantity;
     const saleDate = new Date().toISOString();
+    const resolvedOrderNumber = resolveOrderNumber(orderNumber, saleId);
     const saleItem = this.toRecord(tenantId, saleId, {
       item_id: String(itemId),
       item_name: item.name,
@@ -77,6 +90,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       total,
       profit,
       payment_type: 'cash',
+      order_number: resolvedOrderNumber,
       teller_id: user.id,
       teller_name: user.username,
       sale_date: saleDate,
@@ -115,7 +129,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
   }
 
   async processInstallmentSale(tenantId, user, payload, saveImage) {
-    const { itemId, quantity, customer, witness, downPayment, installmentMonths } = payload;
+    const { itemId, quantity, customer, witness, downPayment, installmentMonths, orderNumber } = payload;
     const includeWitness = payload.includeWitness !== false && Boolean(witness);
     if (includeWitness) {
       const witnessError = validateDistinctCustomerAndWitness(customer, witness);
@@ -180,6 +194,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
 
     const saleId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const saleDate = new Date().toISOString();
+    const resolvedOrderNumber = resolveOrderNumber(orderNumber, saleId);
     const sale = await this.put(tenantId, saleId, {
       item_id: String(itemId),
       item_name: item.name,
@@ -190,6 +205,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       total: totalAmount,
       profit,
       payment_type: 'installment',
+      order_number: resolvedOrderNumber,
       customer_id: customerId,
       teller_id: user.id,
       teller_name: user.username,
@@ -198,6 +214,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
 
     const plan = await installmentPlanDynamoRepository.create(tenantId, {
       sale_id: saleId,
+      order_number: resolvedOrderNumber,
       customer_id: customerId,
       witness_id: witnessId,
       total_amount: totalAmount,

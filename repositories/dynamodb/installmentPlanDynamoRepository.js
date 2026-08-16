@@ -43,6 +43,7 @@ class InstallmentPlanDynamoRepository extends BaseDynamoRepository {
     const id = data.id || `${Date.now()}${Math.floor(Math.random() * 1000)}`;
     await this.put(tenantId, id, {
       sale_id: data.sale_id ?? data.saleId,
+      order_number: data.order_number ?? data.orderNumber ?? null,
       customer_id: data.customer_id ?? data.customerId,
       witness_id: data.witness_id ?? data.witnessId,
       total_amount: data.total_amount ?? data.totalAmount,

@@ -14,6 +14,10 @@ class OrderService {
     return this.repo.getToday(tenantId, user.id, isAdminUser(user));
   }
 
+  getRecent(tenantId, user, days = 7) {
+    return this.repo.getRecent(tenantId, user.id, isAdminUser(user), days);
+  }
+
   getByDateRange(tenantId, startDate, endDate) {
     return this.repo.getByDateRange(tenantId, startDate, endDate);
   }
