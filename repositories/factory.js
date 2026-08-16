@@ -1,5 +1,6 @@
 const productDynamo = require('./dynamodb/productDynamoRepository');
 const categoryDynamo = require('./dynamodb/categoryDynamoRepository');
+const promotionDynamo = require('./dynamodb/promotionDynamoRepository');
 const customerDynamo = require('./dynamodb/customerDynamoRepository');
 const orderDynamo = require('./dynamodb/orderDynamoRepository');
 const installmentPlanDynamo = require('./dynamodb/installmentPlanDynamoRepository');
@@ -18,6 +19,7 @@ module.exports = {
   },
   getProductRepository: () => productDynamo,
   getCategoryRepository: () => categoryDynamo,
+  getPromotionRepository: () => promotionDynamo,
   getCustomerRepository: () => customerDynamo,
   getOrderRepository: () => orderDynamo,
   getInstallmentPlanRepository: () => installmentPlanDynamo,

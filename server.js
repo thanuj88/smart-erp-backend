@@ -30,6 +30,7 @@ app.use((req, res, next) => {
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/items', require('./routes/items'));
 app.use('/api/categories', require('./routes/categories'));
+app.use('/api/promotions', require('./routes/promotions'));
 app.use('/api/sales', require('./routes/sales'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/installment-settings', require('./routes/installmentSettings'));
