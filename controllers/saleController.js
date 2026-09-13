@@ -209,6 +209,43 @@ const getSalesTrend = async (req, res) => {
   }
 };
 
+const getOrderByNumber = async (req, res) => {
+  try {
+    const order = await orderService.getOrderByNumber(resolveTenantId(req), req.params.orderNumber);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    res.json(order);
+  } catch (error) {
+    return handleSaleError(res, error);
+  }
+};
+
+const listReturns = async (req, res) => {
+  try {
+    const returns = await orderService.listReturns(resolveTenantId(req));
+    res.json(returns);
+  } catch (error) {
+    return handleSaleError(res, error);
+  }
+};
+
+const processReturn = async (req, res) => {
+  try {
+    const { orderNumber, lines, reason, returnType } = req.body;
+    if (!orderNumber || !Array.isArray(lines) || !lines.length) {
+      return res.status(400).json({ error: 'orderNumber and at least one return line are required' });
+    }
+    const result = await orderService.processReturn(resolveTenantId(req), req.user, {
+      orderNumber,
+      lines,
+      reason,
+      returnType,
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    return handleSaleError(res, error);
+  }
+};
+
 module.exports = {
   processCashSale,
   processInstallmentSale,
@@ -223,4 +260,7 @@ module.exports = {
   getOverallSummary,
   getSummaryByRange,
   getSalesTrend,
+  getOrderByNumber,
+  listReturns,
+  processReturn,
 };

@@ -30,7 +30,9 @@ class InstallmentPlanDynamoRepository extends BaseDynamoRepository {
   }
 
   async getActive(tenantId) {
-    const plans = await this.queryByTenant(tenantId, { filter: (p) => p.status === 'active' });
+    const plans = await this.queryByTenant(tenantId, {
+      filter: (p) => p.status === 'active' || p.status === 'adjusted',
+    });
     return Promise.all(plans.map((p) => this.enrich(tenantId, p)));
   }
 

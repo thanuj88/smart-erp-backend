@@ -13,7 +13,8 @@ router.get('/', userController.getAllUsers);
 router.post(
   '/',
   [
-    body('username').notEmpty().trim(),
+    body('email').isEmail().normalizeEmail(),
+    body('username').optional().trim(),
     body('password').isLength({ min: 8 }),
     body('role').isIn([
       ROLES.MANAGER,
@@ -25,7 +26,6 @@ router.post(
       'inventory',
       'accountant',
     ]),
-    body('email').optional().isEmail(),
     body('pin').optional().isLength({ min: 4, max: 8 }),
   ],
   validate,

@@ -76,6 +76,7 @@ class ProductDynamoRepository extends BaseDynamoRepository {
       selling_price: sellingPrice,
       price: sellingPrice,
       quantity: data.quantity,
+      return_quantity: 0,
       category: data.category || '',
       category_id: data.categoryId ?? data.category_id ?? null,
       tenant_id: tenantId,
@@ -99,6 +100,11 @@ class ProductDynamoRepository extends BaseDynamoRepository {
       selling_price: sellingPrice,
       price: sellingPrice,
       quantity: data.quantity ?? existing.quantity,
+      return_quantity: (() => {
+        const raw = data.returnQuantity ?? data.return_quantity ?? existing.return_quantity ?? 0;
+        const qty = Number(raw);
+        return Number.isInteger(qty) && qty >= 0 ? qty : existing.return_quantity ?? 0;
+      })(),
       category: data.category ?? existing.category,
       category_id: data.categoryId ?? data.category_id ?? existing.category_id,
     };
@@ -119,6 +125,22 @@ class ProductDynamoRepository extends BaseDynamoRepository {
       throw new Error('Insufficient stock');
     }
     await super.update(tenantId, id, { quantity: item.quantity - amount });
+    return true;
+  }
+
+  async incrementQuantity(tenantId, id, amount) {
+    const item = await super.getById(tenantId, id);
+    if (!item) return false;
+    await super.update(tenantId, id, { quantity: (item.quantity ?? 0) + amount });
+    return true;
+  }
+
+  async incrementReturnQuantity(tenantId, id, amount) {
+    const item = await super.getById(tenantId, id);
+    if (!item) return false;
+    await super.update(tenantId, id, {
+      return_quantity: (item.return_quantity ?? 0) + amount,
+    });
     return true;
   }
 

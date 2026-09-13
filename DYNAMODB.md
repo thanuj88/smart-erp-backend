@@ -65,15 +65,15 @@ Also runs automatically when the API starts (missing items only).
 
 ### Default logins (after fresh seed)
 
-| Role | Username | Password | Notes |
-|------|----------|----------|--------|
-| Super Admin | `superadmin` | `superadmin123` | Platform |
-| Tenant Admin | `admin` | `admin123` | Bright Mart store |
-| Teller | `brightmart-teller` | `teller123` | PIN: `1234` |
-| Manager | `brightmart-manager` | `manager123` | |
-| Accountant | `brightmart-accountant` | `accountant123` | |
+| Role | Email | Password | Notes |
+|------|-------|----------|--------|
+| Super Admin | `superadmin@platform.local` | `superadmin123` | Platform |
+| Tenant Admin | `admin@brightmart.local` | `admin123` | Bright Mart store |
+| Teller | `teller@brightmart.local` | `teller123` | PIN: `1234` |
+| Manager | `manager@brightmart.local` | `manager123` | |
+| Accountant | `accountant@brightmart.local` | `accountant123` | |
 
-Staff usernames use the tenant slug prefix (`brightmart-...`).
+Sign in with **email**. Staff usernames are generated internally from the email and store slug.
 
 ## Wipe and start over
 

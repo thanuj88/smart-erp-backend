@@ -57,6 +57,18 @@ class OrderService {
   getSalesTrend(tenantId, range) {
     return this.repo.getSalesTrend(tenantId, range);
   }
+
+  getOrderByNumber(tenantId, orderNumber) {
+    return this.repo.getOrderByNumber(tenantId, orderNumber);
+  }
+
+  listReturns(tenantId) {
+    return this.repo.listReturns(tenantId);
+  }
+
+  processReturn(tenantId, user, payload) {
+    return this.repo.processReturn(tenantId, user, payload);
+  }
 }
 
 module.exports = new OrderService();

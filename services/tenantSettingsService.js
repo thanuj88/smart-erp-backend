@@ -141,6 +141,11 @@ async function updateForTenant(tenantId, payload) {
     })
   );
 
+  const nextName = item.business_name;
+  if (payload.businessName != null && nextName) {
+    await authDynamo.updateTenantDisplayName(tenantId, nextName);
+  }
+
   return getForTenant(tenantId);
 }
 

@@ -18,7 +18,6 @@ router.post(
     body('password').isLength({ min: 8 }),
     body('fullName').notEmpty().trim(),
     body('businessName').notEmpty().trim(),
-    body('username').optional().trim(),
     body('country').notEmpty().trim(),
     body('phone').notEmpty().trim(),
   ],
@@ -32,7 +31,7 @@ router.post('/verify-email', authController.verifyEmail);
 router.post(
   '/login',
   loginLimiter,
-  [body('password').notEmpty()],
+  [body('email').isEmail().normalizeEmail(), body('password').notEmpty()],
   validate,
   authController.login
 );
@@ -40,7 +39,7 @@ router.post(
 router.post(
   '/login/pin',
   loginLimiter,
-  [body('username').notEmpty(), body('pin').notEmpty()],
+  [body('email').isEmail().normalizeEmail(), body('pin').notEmpty()],
   validate,
   authController.loginPin
 );

@@ -27,9 +27,9 @@ const createTenant = async (req, res) => {
   try {
     const { name, slug, planCode, adminUsername, adminEmail, adminPassword, adminFullName } =
       req.body;
-    if (!name || !adminUsername || !adminPassword) {
+    if (!name || !adminEmail || !adminPassword) {
       return res.status(400).json({
-        error: 'name, adminUsername, and adminPassword are required',
+        error: 'name, adminEmail, and adminPassword are required',
       });
     }
     if (adminPassword.length < 8) {
@@ -130,8 +130,8 @@ const listUsers = async (req, res) => {
 const createUser = async (req, res) => {
   try {
     const { tenantId, username, email, password, role, fullName, branchId, pin } = req.body;
-    if (!username || !password || !role) {
-      return res.status(400).json({ error: 'username, password, and role are required' });
+    if (!email || !password || !role) {
+      return res.status(400).json({ error: 'email, password, and role are required' });
     }
 
     const resolvedTenantId =
@@ -142,6 +142,7 @@ const createUser = async (req, res) => {
       prepared = await staffUserService.prepareStaffUserCreate({
         tenantId: resolvedTenantId,
         username,
+        email,
         role,
       });
     } catch (err) {
@@ -156,7 +157,7 @@ const createUser = async (req, res) => {
     const user = await getPlatformRepository().createPlatformUser({
       tenantId: prepared.normalizedRole === ROLES.SUPER_ADMIN ? null : prepared.tenantId,
       username: prepared.finalUsername,
-      email,
+      email: prepared.normalizedEmail,
       password,
       role: prepared.normalizedRole,
       fullName,

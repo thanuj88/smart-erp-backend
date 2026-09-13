@@ -37,8 +37,8 @@ const createUser = async (req, res) => {
     const tenantId = req.user.tenantId;
     const repo = getAuthRepository();
 
-    if (!username || !password || !role) {
-      return res.status(400).json({ error: 'Username, password, and role are required' });
+    if (!email || !password || !role) {
+      return res.status(400).json({ error: 'Email, password, and role are required' });
     }
 
     const normalizedRole = normalizeRole(role);
@@ -49,10 +49,12 @@ const createUser = async (req, res) => {
     }
 
     let finalUsername;
+    let normalizedEmail;
     try {
-      ({ finalUsername } = await staffUserService.prepareStaffUserCreate({
+      ({ finalUsername, normalizedEmail } = await staffUserService.prepareStaffUserCreate({
         tenantId,
         username,
+        email,
         role: normalizedRole,
       }));
     } catch (err) {
@@ -69,7 +71,7 @@ const createUser = async (req, res) => {
       tenantId,
       branchId: branchId || req.user.branchId,
       username: finalUsername,
-      email,
+      email: normalizedEmail,
       hashedPassword,
       role: normalizedRole,
       fullName,

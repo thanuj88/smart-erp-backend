@@ -29,6 +29,21 @@ router.post('/installment', [
   body('orderNumber').optional().isString(),
 ], validate, saleController.processInstallmentSale);
 
+router.get('/orders/:orderNumber', requireTeller, saleController.getOrderByNumber);
+router.get('/returns', requireReportsAccess, saleController.listReturns);
+router.post(
+  '/returns',
+  [
+    requireTeller,
+    body('orderNumber').isString().notEmpty(),
+    body('lines').isArray({ min: 1 }),
+    body('reason').optional({ nullable: true }).isString(),
+    body('returnType').optional().isIn(['cash', 'defect', 'warranty']),
+  ],
+  validate,
+  saleController.processReturn
+);
+
 // Get top selling products
 router.get('/top', requireTeller, saleController.getTopProducts);
 

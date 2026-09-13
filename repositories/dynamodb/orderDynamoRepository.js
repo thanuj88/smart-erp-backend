@@ -9,7 +9,10 @@ const witnessDynamoRepository = require('./witnessDynamoRepository');
 const installmentPlanDynamoRepository = require('./installmentPlanDynamoRepository');
 const installmentPaymentDynamoRepository = require('./installmentPaymentDynamoRepository');
 const installmentSettingDynamoRepository = require('./installmentSettingDynamoRepository');
-const { resolveOrderNumber } = require('../../utils/orderId');
+const returnDynamoRepository = require('./returnDynamoRepository');
+const { resolveOrderNumber, normalizeOrderNumber } = require('../../utils/orderId');
+
+const RETURN_TYPES = ['cash', 'defect', 'warranty'];
 
 class OrderDynamoRepository extends BaseDynamoRepository {
   constructor() {
@@ -32,9 +35,32 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     return d.toDateString() === n.toDateString();
   }
 
+  _categoryFromProduct(product, fallback = {}) {
+    return {
+      category_id: fallback.category_id || product?.category_id || product?.categoryId || null,
+      category_name:
+        fallback.category_name ||
+        fallback.category ||
+        product?.category_name ||
+        product?.category ||
+        '',
+    };
+  }
+
   async getAll(tenantId) {
-    return this.queryByTenant(tenantId, {
-      sort: (a, b) => new Date(b.sale_date) - new Date(a.sale_date),
+    const [items, products] = await Promise.all([
+      this.queryByTenant(tenantId, {
+        sort: (a, b) => new Date(b.sale_date) - new Date(a.sale_date),
+      }),
+      productDynamoRepository.getAll(tenantId),
+    ]);
+    const byId = new Map(products.map((product) => [String(product.id), product]));
+    return items.map((sale) => {
+      if (sale.category_name || sale.category) {
+        return { ...sale, category_name: sale.category_name || sale.category || '' };
+      }
+      const product = sale.item_id ? byId.get(String(sale.item_id)) : null;
+      return { ...sale, ...this._categoryFromProduct(product, sale) };
     });
   }
 
@@ -90,6 +116,8 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       total,
       profit,
       payment_type: 'cash',
+      returned_qty: 0,
+      ...this._categoryFromProduct(item),
       order_number: resolvedOrderNumber,
       teller_id: user.id,
       teller_name: user.username,
@@ -205,6 +233,8 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       total: totalAmount,
       profit,
       payment_type: 'installment',
+      returned_qty: 0,
+      ...this._categoryFromProduct(item),
       order_number: resolvedOrderNumber,
       customer_id: customerId,
       teller_id: user.id,
@@ -246,7 +276,12 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     return { sale, plan, payments };
   }
 
+  _isReturnSale(sale) {
+    return Boolean(sale?.is_return || sale?.return_flag);
+  }
+
   _isCashSale(sale) {
+    if (this._isReturnSale(sale)) return false;
     return (sale.payment_type || 'cash') === 'cash';
   }
 
@@ -259,7 +294,14 @@ class OrderDynamoRepository extends BaseDynamoRepository {
 
     const matchesTeller = (sale) => isAdmin || String(sale.teller_id) === String(tellerId);
     const salesInPeriod = allSales.filter((s) => dateFilter(s.sale_date) && matchesTeller(s));
-    const cashSales = salesInPeriod.filter((s) => this._isCashSale(s));
+    const regularSales = salesInPeriod.filter((s) => !this._isReturnSale(s));
+    const cashSales = regularSales.filter((s) => this._isCashSale(s));
+    const cashReturnTotal = salesInPeriod
+      .filter((s) => this._isReturnSale(s))
+      .reduce((sum, sale) => sum + (Number(sale.total) || 0), 0);
+    const cashReturnProfit = salesInPeriod
+      .filter((s) => this._isReturnSale(s))
+      .reduce((sum, sale) => sum + (Number(sale.profit) || 0), 0);
     const tellerSaleIds = new Set(allSales.filter(matchesTeller).map((s) => String(s.id)));
 
     const downPaymentIncome = plans.reduce((sum, plan) => {
@@ -278,13 +320,15 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       return sum + (Number(payment.amount_paid) || 0);
     }, 0);
 
-    const cashRevenue = cashSales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0);
+    const cashRevenue =
+      cashSales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0) + cashReturnTotal;
 
     return {
       total_sales: cashSales.length,
       total_revenue: cashRevenue,
-      total_items_sold: salesInPeriod.reduce((sum, sale) => sum + (sale.quantity || 0), 0),
-      total_profit: cashSales.reduce((sum, sale) => sum + (Number(sale.profit) || 0), 0),
+      total_items_sold: regularSales.reduce((sum, sale) => sum + (sale.quantity || 0), 0),
+      total_profit:
+        cashSales.reduce((sum, sale) => sum + (Number(sale.profit) || 0), 0) + cashReturnProfit,
       down_payment_income: downPaymentIncome,
       installment_income: installmentIncome,
       total_actual_income: cashRevenue + downPaymentIncome + installmentIncome,
@@ -296,6 +340,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     const filtered = all.filter((s) => this._inRange(s.sale_date, range));
     const map = {};
     filtered.forEach((s) => {
+      if (this._isReturnSale(s)) return;
       if (!map[s.item_name]) map[s.item_name] = { name: s.item_name, qty: 0, total_sales: 0, sale_count: 0 };
       map[s.item_name].qty += s.quantity || 0;
       map[s.item_name].total_sales += s.total || 0;
@@ -336,9 +381,311 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       if (!buckets[key]) buckets[key] = { period: key, revenue: 0, profit: 0, sales: 0 };
       buckets[key].revenue += s.total || 0;
       buckets[key].profit += s.profit || 0;
-      buckets[key].sales += 1;
+      if (!this._isReturnSale(s)) buckets[key].sales += 1;
     });
     return Object.values(buckets);
+  }
+
+  _mapSaleLine(sale) {
+    const qty = Number(sale.quantity) || 0;
+    const returned = Number(sale.returned_qty) || 0;
+    const unit = Number(sale.selling_price ?? sale.price) || 0;
+    return {
+      ...sale,
+      returned_qty: returned,
+      returnable_qty: Math.max(0, qty - returned),
+      unit_price: unit,
+    };
+  }
+
+  async findByOrderNumber(tenantId, orderNumber) {
+    const normalized = normalizeOrderNumber(orderNumber);
+    if (!normalized) return [];
+    const all = await this.getAll(tenantId);
+    return all.filter((sale) => normalizeOrderNumber(sale.order_number) === normalized);
+  }
+
+  async getOrderByNumber(tenantId, orderNumber) {
+    const lines = (await this.findByOrderNumber(tenantId, orderNumber))
+      .filter((sale) => !this._isReturnSale(sale))
+      .map((sale) => this._mapSaleLine(sale));
+    if (!lines.length) return null;
+
+    const paymentType = lines[0].payment_type || 'cash';
+    let plan = null;
+    if (paymentType === 'installment') {
+      const normalized = normalizeOrderNumber(orderNumber);
+      const plans = await installmentPlanDynamoRepository.queryByTenant(tenantId, {
+        filter: (row) => normalizeOrderNumber(row.order_number) === normalized,
+      });
+      plan = plans[0] || null;
+      if (plan) {
+        plan = await installmentPlanDynamoRepository.enrich(tenantId, plan);
+        plan.payments = await installmentPaymentDynamoRepository.getByPlanId(tenantId, plan.id);
+      }
+    }
+
+    return {
+      order_number: normalizeOrderNumber(orderNumber),
+      payment_type: paymentType,
+      sale_date: lines[0].sale_date,
+      teller_name: lines[0].teller_name,
+      customer_id: lines[0].customer_id || plan?.customer_id || null,
+      lines,
+      plan,
+      returnable: lines.some((line) => line.returnable_qty > 0),
+    };
+  }
+
+  async listReturns(tenantId) {
+    return returnDynamoRepository.getAll(tenantId);
+  }
+
+  async _adjustInstallmentForReturn(tenantId, order, refundValue, isFullReturn) {
+    const plan = order.plan;
+    if (!plan) {
+      return { refund_cash: refundValue, status: null };
+    }
+
+    const payments = plan.payments || [];
+    const pending = payments.filter((p) => p.status === 'pending');
+    const paidAmount = Number(plan.paid_amount) || 0;
+    const downPayment = Number(plan.down_payment) || 0;
+    const unpaidBalance = Math.max(0, Number(plan.total_with_interest || 0) - paidAmount);
+
+    if (isFullReturn) {
+      for (const payment of pending) {
+        await installmentPaymentDynamoRepository.update(tenantId, payment.id, { status: 'cancelled' });
+      }
+      await installmentPlanDynamoRepository.update(tenantId, plan.id, {
+        remaining_amount: 0,
+        monthly_payment: 0,
+        status: 'cancelled',
+      });
+      return {
+        refund_cash: downPayment + paidAmount,
+        unpaid_after: 0,
+        status: 'cancelled',
+        plan_id: plan.id,
+      };
+    }
+
+    let refundCash = 0;
+    let unpaidAfter = unpaidBalance;
+    if (refundValue <= unpaidBalance) {
+      unpaidAfter = unpaidBalance - refundValue;
+    } else {
+      refundCash = refundValue - unpaidBalance;
+      unpaidAfter = 0;
+    }
+
+    if (!pending.length || unpaidAfter <= 0.009) {
+      for (const payment of pending) {
+        await installmentPaymentDynamoRepository.update(tenantId, payment.id, { status: 'cancelled' });
+      }
+      await installmentPlanDynamoRepository.update(tenantId, plan.id, {
+        remaining_amount: 0,
+        monthly_payment: 0,
+        status: paidAmount + downPayment > 0 ? 'completed' : 'cancelled',
+      });
+      return {
+        refund_cash: refundCash,
+        unpaid_after: 0,
+        status: paidAmount + downPayment > 0 ? 'completed' : 'cancelled',
+        plan_id: plan.id,
+      };
+    }
+
+    const monthly = unpaidAfter / pending.length;
+    for (const payment of pending) {
+      await installmentPaymentDynamoRepository.update(tenantId, payment.id, { amount_due: monthly });
+    }
+    await installmentPlanDynamoRepository.update(tenantId, plan.id, {
+      remaining_amount: unpaidAfter,
+      monthly_payment: monthly,
+      status: 'adjusted',
+    });
+    return {
+      refund_cash: refundCash,
+      unpaid_after: unpaidAfter,
+      monthly_payment: monthly,
+      status: 'adjusted',
+      plan_id: plan.id,
+    };
+  }
+
+  async processReturn(tenantId, user, { orderNumber, lines, reason, returnType }) {
+    const order = await this.getOrderByNumber(tenantId, orderNumber);
+    if (!order) {
+      throw Object.assign(new Error('Order not found'), { status: 404 });
+    }
+
+    const type = RETURN_TYPES.includes(returnType) ? returnType : 'cash';
+    const requested = Array.isArray(lines) ? lines : [];
+    const returnLines = [];
+    for (const row of requested) {
+      const sale = order.lines.find((line) => String(line.id) === String(row.saleId || row.sale_id));
+      if (!sale) {
+        throw Object.assign(new Error('Sale line not found on this order'), { status: 400 });
+      }
+      const qty = Number(row.quantity);
+      if (!Number.isInteger(qty) || qty < 1) {
+        throw Object.assign(new Error('Each return line needs a quantity of at least 1'), { status: 400 });
+      }
+      if (qty > sale.returnable_qty) {
+        throw Object.assign(new Error(`Only ${sale.returnable_qty} left to return for ${sale.item_name}`), {
+          status: 400,
+        });
+      }
+      returnLines.push({
+        sale_id: sale.id,
+        item_id: sale.item_id,
+        item_name: sale.item_name,
+        qty,
+        unit_price: sale.unit_price,
+        line_total: sale.unit_price * qty,
+        previous_returned: sale.returned_qty,
+        buying_price: sale.buying_price,
+        selling_price: sale.selling_price ?? sale.price ?? sale.unit_price,
+        category_id: sale.category_id || null,
+        category_name: sale.category_name || sale.category || '',
+      });
+    }
+
+    if (!returnLines.length) {
+      throw Object.assign(new Error('Select at least one item to return'), { status: 400 });
+    }
+
+    if (type === 'warranty') {
+      for (const line of returnLines) {
+        if (!line.item_id) continue;
+        const product = await productDynamoRepository.getById(tenantId, line.item_id);
+        if (!product || (product.quantity ?? 0) < line.qty) {
+          throw Object.assign(
+            new Error(`Not enough sellable stock to replace ${line.item_name}`),
+            { status: 400, available: product?.quantity ?? 0 }
+          );
+        }
+      }
+    }
+
+    const refundValue = returnLines.reduce((sum, line) => sum + line.line_total, 0);
+    const remainingAfter = order.lines.map((line) => {
+      const returning = returnLines.find((row) => String(row.sale_id) === String(line.id));
+      return (line.returnable_qty || 0) - (returning?.qty || 0);
+    });
+    const isFullReturn = remainingAfter.every((qty) => qty <= 0);
+
+    let refundCash = 0;
+    let installmentAdjustment = null;
+    if (type === 'cash') {
+      refundCash = refundValue;
+      if (order.payment_type === 'installment') {
+        installmentAdjustment = await this._adjustInstallmentForReturn(
+          tenantId,
+          order,
+          refundValue,
+          isFullReturn
+        );
+        refundCash = installmentAdjustment.refund_cash;
+      }
+    }
+
+    for (const line of returnLines) {
+      await this.update(tenantId, line.sale_id, {
+        returned_qty: line.previous_returned + line.qty,
+      });
+      if (!line.item_id) continue;
+      await productDynamoRepository.incrementReturnQuantity(tenantId, line.item_id, line.qty);
+      if (type === 'warranty') {
+        await productDynamoRepository.decrementQuantity(tenantId, line.item_id, line.qty);
+      }
+    }
+
+    const returnId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const returnNumber = `RET${String(Date.now()).slice(-6)}`;
+    const tellerName = user.full_name || user.fullName || user.username;
+    const record = await returnDynamoRepository.put(tenantId, returnId, {
+      return_number: returnNumber,
+      order_number: order.order_number,
+      payment_type: order.payment_type,
+      return_type: type,
+      reason: reason ? String(reason).trim() : null,
+      refund_cash: refundCash,
+      refund_value: refundValue,
+      replacement_qty: type === 'warranty' ? returnLines.reduce((sum, line) => sum + line.qty, 0) : 0,
+      installment_adjustment: installmentAdjustment,
+      lines: returnLines.map(({ previous_returned, ...line }) => line),
+      teller_id: user.id,
+      teller_name: tellerName,
+    });
+
+    await this._recordReturnSales(tenantId, user, {
+      orderNumber: order.order_number,
+      returnNumber,
+      returnType: type,
+      returnLines,
+      refundValue,
+      refundCash,
+      tellerName,
+    });
+
+    return {
+      ...record,
+      order: await this.getOrderByNumber(tenantId, order.order_number),
+    };
+  }
+
+  async _recordReturnSales(tenantId, user, {
+    orderNumber,
+    returnNumber,
+    returnType,
+    returnLines,
+    refundValue,
+    refundCash,
+    tellerName,
+  }) {
+    const saleDate = new Date().toISOString();
+    for (let i = 0; i < returnLines.length; i += 1) {
+      const line = returnLines[i];
+      const lineTotal = Number(line.line_total) || 0;
+      const cashOut =
+        returnType === 'cash' && refundValue > 0 ? (refundCash * lineTotal) / refundValue : 0;
+      const unitProfit =
+        (Number(line.selling_price) || 0) - (Number(line.buying_price) || 0);
+      let category = {
+        category_id: line.category_id || null,
+        category_name: line.category_name || '',
+      };
+      if (!category.category_name && line.item_id) {
+        const product = await productDynamoRepository.getById(tenantId, line.item_id);
+        category = this._categoryFromProduct(product, line);
+      }
+      const saleId = `${Date.now()}${Math.floor(Math.random() * 1000)}${i}`;
+      await this.put(tenantId, saleId, {
+        item_id: line.item_id ? String(line.item_id) : null,
+        item_name: line.item_name,
+        quantity: line.qty,
+        buying_price: line.buying_price,
+        selling_price: line.selling_price,
+        price: line.unit_price,
+        total: -cashOut,
+        profit: lineTotal > 0 && cashOut ? -((unitProfit * line.qty * cashOut) / lineTotal) : 0,
+        payment_type: returnType === 'cash' ? 'cash' : 'return',
+        is_return: true,
+        return_flag: true,
+        return_type: returnType,
+        return_number: returnNumber,
+        original_sale_id: line.sale_id,
+        returned_qty: line.qty,
+        ...category,
+        order_number: orderNumber,
+        teller_id: user.id,
+        teller_name: tellerName,
+        sale_date: saleDate,
+        tenant_id: tenantId,
+      });
+    }
   }
 }
 

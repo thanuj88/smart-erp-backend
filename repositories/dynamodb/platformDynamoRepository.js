@@ -11,6 +11,7 @@ const authConfig = require('../../config/auth');
 const { ROLES, normalizeRole } = require('../../config/permissions');
 const authDynamo = require('./authDynamoRepository');
 const ENTITY = require('../entityTypes');
+const { normalizeEmail } = require('../../utils/staffUsername');
 
 const META_SK = 'METADATA';
 const TRIAL_SK = 'TRIAL';
@@ -20,7 +21,7 @@ const DEFAULT_PLANS = [
   {
     code: 'trial',
     name: 'Free Trial',
-    description: '14-day trial for new stores',
+    description: `${authConfig.trialDays}-day trial for new stores`,
     price_monthly: 0,
     max_users: 5,
     max_tellers: 2,
@@ -227,7 +228,14 @@ class PlatformDynamoRepository {
   }
 
   async createTenant({ name, slug, planCode, adminUsername, adminEmail, adminPassword, adminFullName }) {
+    const ownerEmail = normalizeEmail(adminEmail);
+    if (!ownerEmail) throw new Error('Admin email is required');
+    const existingEmail = await authDynamo.findUserByUsernameOrEmail(ownerEmail);
+    if (existingEmail) throw new Error('An account with this email already exists');
+
     const uniqueSlug = await authDynamo.uniqueSlug(slug || name);
+    const ownerUsername =
+      adminUsername || (await authDynamo.uniqueUsernameFromEmail({ slug: uniqueSlug }, ownerEmail));
     const plans = await this.listPlans();
     const effectivePlan = plans.find((p) => p.code === (planCode || 'trial'))?.code || 'trial';
 
@@ -296,16 +304,16 @@ class PlatformDynamoRepository {
     await authDynamo.users.put(tenantId, userId, {
       tenant_id: tenantId,
       branch_id: branchId,
-      username: adminUsername,
-      email: adminEmail || null,
+      username: ownerUsername,
+      email: ownerEmail,
       password: hash,
-      full_name: adminFullName || adminUsername,
+      full_name: adminFullName || ownerUsername,
       role: ROLES.TENANT_ADMIN,
       is_active: 1,
       email_verified_at: now,
     });
-    await authDynamo._putLookup('USERNAME', adminUsername, tenantId, userId);
-    if (adminEmail) await authDynamo._putLookup('EMAIL', adminEmail, tenantId, userId);
+    await authDynamo._putLookup('USERNAME', ownerUsername, tenantId, userId);
+    await authDynamo._putLookup('EMAIL', ownerEmail, tenantId, userId);
 
     return { tenantId, branchId, userId, slug: uniqueSlug };
   }
@@ -334,6 +342,28 @@ class PlatformDynamoRepository {
         },
       })
     );
+
+    const trial = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { PK: tenantPk(tenantId), SK: TRIAL_SK },
+      })
+    );
+    if (trial.Item) {
+      await this.client.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { PK: tenantPk(tenantId), SK: TRIAL_SK },
+          UpdateExpression: 'SET #status = :status, updatedAt = :now',
+          ExpressionAttributeNames: { '#status': 'status' },
+          ExpressionAttributeValues: {
+            ':status': planCode === 'trial' ? 'active' : 'converted',
+            ':now': now,
+          },
+        })
+      );
+    }
+
     return this.getTenant(tenantId);
   }
 
@@ -594,7 +624,14 @@ class PlatformDynamoRepository {
 
   async seedSaasPlans() {
     const existing = await this.listPlans();
-    if (existing.length > 0) return false;
+    if (existing.length > 0) {
+      const expected = `${authConfig.trialDays}-day trial for new stores`;
+      const trial = existing.find((p) => p.code === 'trial');
+      if (trial && trial.description !== expected) {
+        await this.updatePlan('trial', { description: expected });
+      }
+      return false;
+    }
     const now = new Date().toISOString();
     for (const plan of DEFAULT_PLANS) {
       await this.client.send(

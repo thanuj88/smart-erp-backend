@@ -77,7 +77,7 @@ async function assertAccountActive(user, tenantId) {
 
 const register = async (req, res) => {
   try {
-    const { email, password, fullName, businessName, username, captchaToken, country, phone } = req.body;
+    const { email, password, fullName, businessName, captchaToken, country, phone } = req.body;
 
     if (!email || !password || !fullName || !businessName) {
       return res.status(400).json({ error: 'Email, password, full name, and business name are required' });
@@ -97,11 +97,9 @@ const register = async (req, res) => {
       return res.status(400).json({ error: 'CAPTCHA verification failed' });
     }
 
-    const loginName = username || email.split('@')[0];
     const existingEmail = await getAuthRepository().findUserByUsernameOrEmail(email);
-    const existingUser = await getAuthRepository().findUserByUsernameOrEmail(loginName);
-    if (existingEmail || existingUser) {
-      return res.status(409).json({ error: 'An account with this email or username already exists' });
+    if (existingEmail) {
+      return res.status(409).json({ error: 'An account with this email already exists' });
     }
 
     const passwordHash = await bcrypt.hash(password, authConfig.bcryptRounds);
@@ -109,7 +107,6 @@ const register = async (req, res) => {
       businessName,
       fullName,
       email,
-      username: loginName,
       passwordHash,
       phone: toE164(phone, selectedCountry.code),
       countryCode: selectedCountry.code,
@@ -170,14 +167,13 @@ const verifyEmail = async (req, res) => {
 
 const login = async (req, res) => {
   try {
-    const { username, email, password, tenantId } = req.body;
-    const identifier = username || email;
+    const { email, password, tenantId } = req.body;
 
-    if (!identifier || !password) {
-      return res.status(400).json({ error: 'Username/email and password are required' });
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    const user = await getAuthRepository().findUserByUsernameOrEmail(identifier, tenantId || null);
+    const user = await getAuthRepository().findUserByUsernameOrEmail(email, tenantId || null);
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
@@ -228,12 +224,12 @@ const login = async (req, res) => {
 
 const loginPin = async (req, res) => {
   try {
-    const { username, pin, tenantId, branchId } = req.body;
-    if (!username || !pin) {
-      return res.status(400).json({ error: 'Username and PIN are required' });
+    const { email, pin, tenantId, branchId } = req.body;
+    if (!email || !pin) {
+      return res.status(400).json({ error: 'Email and PIN are required' });
     }
 
-    const user = await getAuthRepository().findUserForPinLogin(username, tenantId, branchId);
+    const user = await getAuthRepository().findUserForPinLogin(email, tenantId, branchId);
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
