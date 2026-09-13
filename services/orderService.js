@@ -1,5 +1,5 @@
 const { getOrderRepository } = require('../repositories/factory');
-const { isAdminRole } = require('../middleware/auth');
+const { isAdminUser } = require('../middleware/auth');
 
 class OrderService {
   constructor(repo = getOrderRepository()) {
@@ -11,10 +11,7 @@ class OrderService {
   }
 
   getToday(tenantId, user) {
-    const isAdmin =
-      isAdminRole(user.role) ||
-      ['TENANT_ADMIN', 'SUPER_ADMIN', 'MANAGER'].includes(String(user.role).toUpperCase());
-    return this.repo.getToday(tenantId, user.id, isAdmin);
+    return this.repo.getToday(tenantId, user.id, isAdminUser(user));
   }
 
   getByDateRange(tenantId, startDate, endDate) {
@@ -34,18 +31,15 @@ class OrderService {
   }
 
   getDailySummary(tenantId, user) {
-    const isAdmin = isAdminRole(user.role) || user.role === 'admin';
-    return this.repo.getDailySummary(tenantId, user.id, isAdmin);
+    return this.repo.getDailySummary(tenantId, user.id, isAdminUser(user));
   }
 
   getWeeklySummary(tenantId, user) {
-    const isAdmin = isAdminRole(user.role) || user.role === 'admin';
-    return this.repo.getWeeklySummary(tenantId, user.id, isAdmin);
+    return this.repo.getWeeklySummary(tenantId, user.id, isAdminUser(user));
   }
 
   getMonthlySummary(tenantId, user) {
-    const isAdmin = isAdminRole(user.role) || user.role === 'admin';
-    return this.repo.getMonthlySummary(tenantId, user.id, isAdmin);
+    return this.repo.getMonthlySummary(tenantId, user.id, isAdminUser(user));
   }
 
   getOverallSummary(tenantId) {

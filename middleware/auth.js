@@ -45,6 +45,20 @@ function canSellUser(user) {
   ]);
 }
 
+function canViewReports(user) {
+  return userHasAnyPermission(user?.permissions, [
+    PERMISSIONS.REPORTS_VIEW,
+    PERMISSIONS.PLATFORM_MANAGE,
+  ]);
+}
+
+const requireReportsAccess = (req, res, next) => {
+  if (isAdminUser(req.user) || canSellUser(req.user) || canViewReports(req.user)) {
+    return next();
+  }
+  return res.status(403).json({ error: 'Access denied. Reports permission required.' });
+};
+
 const requireAdmin = (req, res, next) => {
   if (!isAdminUser(req.user)) {
     return res.status(403).json({ error: 'Access denied. Insufficient permissions.' });
@@ -71,6 +85,8 @@ module.exports = {
   requireAdmin,
   requireTeller,
   requireTenantAdmin,
+  requireReportsAccess,
   isAdminUser,
   canSellUser,
+  canViewReports,
 };

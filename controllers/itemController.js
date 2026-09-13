@@ -1,5 +1,6 @@
 const productService = require('../services/productService');
 const { resolveTenantId } = require('../utils/tenant');
+const { saveImage } = require('../utils/saveImage');
 
 const getAllItems = async (req, res) => {
   try {
@@ -34,19 +35,25 @@ const getItemById = async (req, res) => {
 
 const createItem = async (req, res) => {
   try {
-    const { name, description, buyingPrice, sellingPrice, price, quantity, category, categoryId } = req.body;
-    if (!name || sellingPrice === undefined || price === undefined || quantity === undefined) {
-      return res.status(400).json({ error: 'Name, prices, and quantity are required' });
+    const { name, description, buyingPrice, sellingPrice, quantity, category, categoryId } = req.body;
+    if (!name || sellingPrice === undefined || quantity === undefined) {
+      return res.status(400).json({ error: 'Name, selling price, and quantity are required' });
     }
     const newItem = await productService.create(resolveTenantId(req), {
       name,
       description,
       buyingPrice,
       sellingPrice,
-      price,
       quantity,
       category,
       categoryId,
+      imagePath: req.body.image
+        ? saveImage(
+            req.body.image,
+            'products',
+            `product_${Date.now()}${Math.floor(Math.random() * 1000)}.jpg`
+          )
+        : null,
     });
     res.status(201).json(newItem);
   } catch (error) {
@@ -61,15 +68,27 @@ const updateItem = async (req, res) => {
     const item = await productService.getById(tenantId, req.params.id);
     if (!item) return res.status(404).json({ error: 'Item not found' });
 
+    const sellingPrice = req.body.sellingPrice ?? item.selling_price;
+    let imagePath = item.image_path;
+    if (req.body.image) {
+      imagePath = saveImage(
+        req.body.image,
+        'products',
+        `product_${req.params.id}_${Date.now()}.jpg`
+      );
+    } else if (req.body.removeImage) {
+      imagePath = null;
+    }
+
     const updatedItem = await productService.update(tenantId, req.params.id, {
       name: req.body.name ?? item.name,
       description: req.body.description ?? item.description,
       buyingPrice: req.body.buyingPrice ?? item.buying_price,
-      sellingPrice: req.body.sellingPrice ?? item.selling_price,
-      price: req.body.price ?? item.price,
+      sellingPrice,
       quantity: req.body.quantity ?? item.quantity,
       category: req.body.category ?? item.category,
       categoryId: req.body.categoryId ?? item.category_id,
+      imagePath,
     });
     res.json(updatedItem);
   } catch (error) {

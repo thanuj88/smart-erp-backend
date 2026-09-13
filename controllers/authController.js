@@ -19,6 +19,11 @@ function clientMeta(req) {
 async function formatUserResponse(user, trialEndsAt) {
   const role = normalizeRole(user.role);
   const permissions = await permissionService.getPermissionsForRole(role);
+  let tenantSlug = null;
+  if (user.tenant_id) {
+    const meta = await getAuthRepository().getTenantMeta(user.tenant_id);
+    tenantSlug = meta?.slug || null;
+  }
   return {
     id: user.id,
     username: user.username,
@@ -26,6 +31,7 @@ async function formatUserResponse(user, trialEndsAt) {
     fullName: user.full_name,
     role,
     tenantId: user.tenant_id,
+    tenantSlug,
     branchId: user.branch_id,
     permissions,
     trialEndsAt: trialEndsAt || null,

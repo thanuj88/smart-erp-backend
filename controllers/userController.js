@@ -3,6 +3,12 @@ const { getAuthRepository } = require('../repositories/factory');
 const authConfig = require('../config/auth');
 const { ROLES, normalizeRole } = require('../config/permissions');
 const tokenService = require('../services/tokenService');
+const {
+  buildStaffUsername,
+  localPartFromInput,
+  buildTenantPrefix,
+} = require('../utils/staffUsername');
+const planQuotaService = require('../services/planQuotaService');
 
 const STAFF_ROLES = [
   ROLES.MANAGER,
@@ -42,9 +48,30 @@ const createUser = async (req, res) => {
       });
     }
 
-    const existing = await repo.findUserByUsernameOrEmail(username, tenantId);
+    const tenantMeta = await repo.getTenantMeta(tenantId);
+    if (!tenantMeta) {
+      return res.status(400).json({ error: 'Store not found' });
+    }
+
+    let finalUsername;
+    try {
+      finalUsername = buildStaffUsername(tenantMeta, localPartFromInput(tenantMeta, username));
+    } catch (err) {
+      return res.status(400).json({ error: err.message || 'Invalid username' });
+    }
+
+    const existing = await repo.findUserByUsernameOrEmail(finalUsername, null);
     if (existing) {
-      return res.status(400).json({ error: 'Username already exists in this store' });
+      const prefix = buildTenantPrefix(tenantMeta);
+      return res.status(400).json({
+        error: `Username already taken. Use a different name after "${prefix}-"`,
+      });
+    }
+
+    try {
+      await planQuotaService.assertCanAddStaff(tenantId, normalizedRole);
+    } catch (quotaErr) {
+      return res.status(quotaErr.statusCode || 403).json({ error: quotaErr.message });
     }
 
     const hashedPassword = await bcrypt.hash(password, authConfig.bcryptRounds);
@@ -56,7 +83,7 @@ const createUser = async (req, res) => {
     const newUser = await repo.createStaffUser({
       tenantId,
       branchId: branchId || req.user.branchId,
-      username,
+      username: finalUsername,
       email,
       hashedPassword,
       role: normalizedRole,
@@ -92,6 +119,11 @@ const updateUser = async (req, res) => {
       if (normalizedRole === ROLES.SUPER_ADMIN || normalizedRole === ROLES.TENANT_ADMIN) {
         return res.status(400).json({ error: 'Cannot assign admin roles via this endpoint' });
       }
+      try {
+        await planQuotaService.assertCanAssignRole(user.tenant_id, normalizedRole, user.role);
+      } catch (quotaErr) {
+        return res.status(quotaErr.statusCode || 403).json({ error: quotaErr.message });
+      }
     }
 
     let pinHash;
@@ -99,8 +131,30 @@ const updateUser = async (req, res) => {
       pinHash = pin ? await tokenService.hashPin(pin) : null;
     }
 
+    let finalUsername = username;
+    if (username) {
+      const tenantMeta = await repo.getTenantMeta(user.tenant_id);
+      if (!tenantMeta) {
+        return res.status(400).json({ error: 'Store not found' });
+      }
+      try {
+        finalUsername = buildStaffUsername(tenantMeta, localPartFromInput(tenantMeta, username));
+      } catch (err) {
+        return res.status(400).json({ error: err.message || 'Invalid username' });
+      }
+      if (finalUsername.toLowerCase() !== String(user.username).toLowerCase()) {
+        const existing = await repo.findUserByUsernameOrEmail(finalUsername, null);
+        if (existing && String(existing.id) !== String(userId)) {
+          const prefix = buildTenantPrefix(tenantMeta);
+          return res.status(400).json({
+            error: `Username already taken. Use a different name after "${prefix}-"`,
+          });
+        }
+      }
+    }
+
     const updated = await repo.updateStaffUser(userId, {
-      username,
+      username: finalUsername,
       role: role ? normalizeRole(role) : undefined,
       fullName,
       branchId,
