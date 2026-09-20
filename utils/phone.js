@@ -232,6 +232,28 @@ function toE164(phone, countryCode) {
   return `+${country.dialCode}${nsn}`;
 }
 
+/** Digit key for matching members without requiring a country code. */
+function memberPhoneKey(phone, countryCode) {
+  const country = getCountry(countryCode);
+  return toNationalNumber(phone, country);
+}
+
+function sanitizeLocalPhoneInput(value, countryCode) {
+  const country = getCountry(countryCode);
+  const cleaned = String(value || '').replace(/[^\d\s-]/g, '');
+  const maxDigits = (country.nsnMax || 10) + 1;
+  let digits = 0;
+  let out = '';
+  for (const ch of cleaned) {
+    if (/\d/.test(ch)) {
+      if (digits >= maxDigits) continue;
+      digits += 1;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 module.exports = {
   COUNTRIES,
   DEFAULT_COUNTRY_CODE,
@@ -239,7 +261,9 @@ module.exports = {
   digitsOnly,
   toNationalNumber,
   sanitizePhoneInput,
+  sanitizeLocalPhoneInput,
   isValidPhoneForCountry,
   phoneValidationMessage,
   toE164,
+  memberPhoneKey,
 };

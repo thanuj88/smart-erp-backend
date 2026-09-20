@@ -174,7 +174,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     });
   }
 
-  async processCashSale(tenantId, user, { itemId, quantity, orderNumber }) {
+  async processCashSale(tenantId, user, { itemId, quantity, orderNumber, customerId = null, customerName = null, customerPhone = null }) {
     const item = await productDynamoRepository.getById(tenantId, itemId);
     if (!item) throw Object.assign(new Error('Item not found'), { status: 404 });
     if ((item.quantity ?? 0) < quantity) {
@@ -203,6 +203,13 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       teller_name: user.username,
       sale_date: saleDate,
       tenant_id: tenantId,
+      ...(customerId
+        ? {
+            customer_id: String(customerId),
+            customer_name: customerName || null,
+            customer_phone: customerPhone || null,
+          }
+        : {}),
     });
 
     await this.client.send(
@@ -266,24 +273,12 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     const monthlyPayment = totalWithInterest / installmentMonths;
     const profit = (item.selling_price - item.buying_price) * quantity;
 
-    let customerIdImage = null;
-    if (customer.idImage) {
-      const customerFilename = `customer_${Date.now()}_${customer.idCardNo}.jpg`;
-      customerIdImage = saveImage(customer.idImage, 'customers', customerFilename);
-    }
-
-    let existingCustomer = await customerDynamoRepository.getByIdCardNo(tenantId, customer.idCardNo);
-    let customerId;
-    if (existingCustomer) {
-      customerId = existingCustomer.id;
-    } else {
-      const created = await customerDynamoRepository.create(tenantId, {
-        ...customer,
-        idCardNo: customer.idCardNo,
-        idImagePath: customerIdImage,
-      });
-      customerId = created.id;
-    }
+    const existingCustomer = customer.memberId
+      ? await customerDynamoRepository.getById(tenantId, customer.memberId)
+      : null;
+    const customerId = existingCustomer ? existingCustomer.id : null;
+    const customerName = existingCustomer?.name || String(customer.name || '').trim() || null;
+    const customerPhone = existingCustomer?.phone || String(customer.phone || '').trim() || null;
 
     let witnessId = null;
     if (includeWitness && witness) {
@@ -317,6 +312,8 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       ...this._categoryFromProduct(item),
       order_number: resolvedOrderNumber,
       customer_id: customerId,
+      customer_name: customerName,
+      customer_phone: customerPhone,
       teller_id: user.id,
       teller_name: user.username,
       sale_date: saleDate,
@@ -326,6 +323,8 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       sale_id: saleId,
       order_number: resolvedOrderNumber,
       customer_id: customerId,
+      customer_name: customerName,
+      customer_phone: customerPhone,
       witness_id: witnessId,
       total_amount: totalAmount,
       down_payment: downPayment,

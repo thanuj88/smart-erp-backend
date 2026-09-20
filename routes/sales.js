@@ -14,6 +14,7 @@ router.post('/cash', [
   body('itemId').isInt(),
   body('quantity').isInt({ min: 1 }),
   body('orderNumber').optional().isString(),
+  body('customerPhone').optional({ nullable: true }).isString(),
 ], validate, saleController.processCashSale);
 
 // Process an installment sale (Teller and Admin)

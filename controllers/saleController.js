@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const orderService = require('../services/orderService');
+const customerService = require('../services/customerService');
 const { resolveTenantId } = require('../utils/tenant');
 const { validateDistinctCustomerAndWitness, validateNicNumbers, normalizeNic } = require('../utils/installmentValidation');
 
@@ -27,14 +28,21 @@ const handleSaleError = (res, error) => {
 
 const processCashSale = async (req, res) => {
   try {
-    const { itemId, quantity, orderNumber } = req.body;
+    const { itemId, quantity, orderNumber, customerPhone } = req.body;
     if (!itemId || !quantity || quantity <= 0) {
       return res.status(400).json({ error: 'Valid itemId and quantity are required' });
     }
-    const sale = await orderService.processCashSale(resolveTenantId(req), req.user, {
+    const tenantId = resolveTenantId(req);
+    const member = customerPhone
+      ? await customerService.lookupByPhone(tenantId, customerPhone)
+      : null;
+    const sale = await orderService.processCashSale(tenantId, req.user, {
       itemId,
       quantity,
       orderNumber,
+      customerId: member?.id || null,
+      customerName: member?.name || null,
+      customerPhone: member?.phone || null,
     });
     res.status(201).json(sale);
   } catch (error) {
@@ -49,6 +57,9 @@ const processInstallmentSale = async (req, res) => {
     if (!itemId || !quantity || !customer || downPayment === undefined || !installmentMonths) {
       return res.status(400).json({ error: 'All fields are required for installment sale' });
     }
+    if (!String(customer.phone || '').trim()) {
+      return res.status(400).json({ error: 'Customer phone number is required' });
+    }
     if (includeWitness && (!witness || typeof witness !== 'object')) {
       return res.status(400).json({ error: 'Witness details are required' });
     }
@@ -62,13 +73,19 @@ const processInstallmentSale = async (req, res) => {
         return res.status(400).json({ error: witnessError });
       }
     }
+    const tenantId = resolveTenantId(req);
+    const member = await customerService.lookupByPhone(tenantId, customer.phone);
     const result = await orderService.processInstallmentSale(
-      resolveTenantId(req),
+      tenantId,
       req.user,
       {
         itemId,
         quantity,
-        customer: { ...customer, idCardNo: normalizeNic(customer.idCardNo ?? customer.id_card_no) },
+        customer: {
+          ...customer,
+          idCardNo: normalizeNic(customer.idCardNo ?? customer.id_card_no),
+          memberId: member?.id || null,
+        },
         witness: includeWitness
           ? { ...witness, idCardNo: normalizeNic(witness.idCardNo ?? witness.id_card_no) }
           : null,

@@ -46,7 +46,9 @@ class InstallmentPlanDynamoRepository extends BaseDynamoRepository {
     await this.put(tenantId, id, {
       sale_id: data.sale_id ?? data.saleId,
       order_number: data.order_number ?? data.orderNumber ?? null,
-      customer_id: data.customer_id ?? data.customerId,
+      customer_id: data.customer_id ?? data.customerId ?? null,
+      customer_name: data.customer_name ?? data.customerName ?? null,
+      customer_phone: data.customer_phone ?? data.customerPhone ?? null,
       witness_id: data.witness_id ?? data.witnessId,
       total_amount: data.total_amount ?? data.totalAmount,
       down_payment: data.down_payment ?? data.downPayment,
