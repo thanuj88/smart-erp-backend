@@ -36,7 +36,15 @@ router.post('/', [
   body('removeImage').optional().isBoolean(),
 ], validate, itemController.createItem);
 
-router.put('/:id', requireAdmin, itemController.updateItem);
+router.put(
+  '/:id',
+  [
+    requireAdmin,
+    body('returnQuantity').optional({ values: 'falsy' }).isInt({ min: 0 }),
+  ],
+  validate,
+  itemController.updateItem
+);
 
 router.delete('/:id', requireAdmin, itemController.deleteItem);
 

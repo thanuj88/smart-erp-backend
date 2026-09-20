@@ -86,6 +86,7 @@ const updateItem = async (req, res) => {
       buyingPrice: req.body.buyingPrice ?? item.buying_price,
       sellingPrice,
       quantity: req.body.quantity ?? item.quantity,
+      returnQuantity: req.body.returnQuantity ?? req.body.return_quantity ?? item.return_quantity ?? 0,
       category: req.body.category ?? item.category,
       categoryId: req.body.categoryId ?? item.category_id,
       imagePath,

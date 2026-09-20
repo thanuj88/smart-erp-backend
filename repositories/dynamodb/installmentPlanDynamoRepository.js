@@ -30,7 +30,9 @@ class InstallmentPlanDynamoRepository extends BaseDynamoRepository {
   }
 
   async getActive(tenantId) {
-    const plans = await this.queryByTenant(tenantId, { filter: (p) => p.status === 'active' });
+    const plans = await this.queryByTenant(tenantId, {
+      filter: (p) => p.status === 'active' || p.status === 'adjusted',
+    });
     return Promise.all(plans.map((p) => this.enrich(tenantId, p)));
   }
 
@@ -43,7 +45,10 @@ class InstallmentPlanDynamoRepository extends BaseDynamoRepository {
     const id = data.id || `${Date.now()}${Math.floor(Math.random() * 1000)}`;
     await this.put(tenantId, id, {
       sale_id: data.sale_id ?? data.saleId,
-      customer_id: data.customer_id ?? data.customerId,
+      order_number: data.order_number ?? data.orderNumber ?? null,
+      customer_id: data.customer_id ?? data.customerId ?? null,
+      customer_name: data.customer_name ?? data.customerName ?? null,
+      customer_phone: data.customer_phone ?? data.customerPhone ?? null,
       witness_id: data.witness_id ?? data.witnessId,
       total_amount: data.total_amount ?? data.totalAmount,
       down_payment: data.down_payment ?? data.downPayment,

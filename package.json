@@ -7,7 +7,11 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "init-dynamo": "node scripts/initDynamoTable.js",
-    "seed-dynamo": "node scripts/seedDynamo.js"
+    "seed-dynamo": "node scripts/seedDynamo.js",
+    "seed-catalog": "node scripts/seedBrightMartCatalog.js",
+    "dynamo:up": "node scripts/startDynamoLocal.js",
+    "dynamo:up:docker": "docker compose up -d",
+    "dynamo:down:docker": "docker compose stop"
   },
   "keywords": [
     "inventory",
@@ -29,6 +33,7 @@
     "pg": "^8.20.0"
   },
   "devDependencies": {
+    "dynamodb-local": "^0.0.38",
     "nodemon": "^3.0.2"
   }
 }

@@ -1,0 +1,14 @@
+# DynamoDB Local with persistent storage (data survives container restarts).
+# Start:  docker compose up -d
+# Stop:   docker compose stop
+# Logs:   docker compose logs -f dynamodb-local
+services:
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: shopinventory-dynamodb
+    ports:
+      - '8000:8000'
+    command: '-jar DynamoDBLocal.jar -sharedDb -dbPath /home/dynamodblocal/data'
+    volumes:
+      - ./dynamodb-data:/home/dynamodblocal/data
+    restart: unless-stopped

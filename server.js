@@ -30,6 +30,7 @@ app.use((req, res, next) => {
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/items', require('./routes/items'));
 app.use('/api/categories', require('./routes/categories'));
+app.use('/api/promotions', require('./routes/promotions'));
 app.use('/api/sales', require('./routes/sales'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/installment-settings', require('./routes/installmentSettings'));
@@ -37,8 +38,17 @@ app.use('/api/customers', require('./routes/customers'));
 app.use('/api/installment-plans', require('./routes/installmentPlans'));
 app.use('/api/installment-payments', require('./routes/installmentPayments'));
 app.use('/api/platform', require('./routes/platform'));
+app.use('/api/settings', require('./routes/settings'));
 
-app.use('/uploads', express.static('uploads'));
+app.use(
+  '/uploads',
+  (req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    next();
+  },
+  express.static('uploads')
+);
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -76,10 +86,12 @@ app.use((err, req, res, next) => {
 app.listen(port, () => {
   console.log(`\n🚀 Server running on port ${port}`);
   console.log(`📡 API available at http://localhost:${port}/api`);
-  console.log(`\n📝 Default credentials (after seed):`);
-  console.log(`   Tenant Admin - username: admin, password: admin123`);
-  console.log(`   Teller - username: teller, password: teller123`);
-  console.log(`   Super Admin - username: superadmin, password: superadmin123\n`);
+  console.log(`\n📝 Default credentials (after fresh seed — see backend/DYNAMODB.md):`);
+  console.log(`   Super Admin  - superadmin@platform.local / superadmin123`);
+  console.log(`   Tenant Admin - admin@brightmart.local / admin123`);
+  console.log(`   Teller       - teller@brightmart.local / teller123 (PIN: 1234)`);
+  console.log(`   Manager      - manager@brightmart.local / manager123`);
+  console.log(`   Accountant   - accountant@brightmart.local / accountant123\n`);
 });
 
 module.exports = app;

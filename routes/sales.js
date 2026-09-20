@@ -12,7 +12,9 @@ router.use(authenticate);
 router.post('/cash', [
   requireTeller,
   body('itemId').isInt(),
-  body('quantity').isInt({ min: 1 })
+  body('quantity').isInt({ min: 1 }),
+  body('orderNumber').optional().isString(),
+  body('customerPhone').optional({ nullable: true }).isString(),
 ], validate, saleController.processCashSale);
 
 // Process an installment sale (Teller and Admin)
@@ -21,16 +23,36 @@ router.post('/installment', [
   body('itemId').isInt(),
   body('quantity').isInt({ min: 1 }),
   body('customer').isObject(),
-  body('witness').isObject(),
+  body('includeWitness').optional().isBoolean(),
+  body('witness').optional({ nullable: true }).isObject(),
   body('downPayment').isFloat({ min: 0 }),
-  body('installmentMonths').isInt().isIn([3, 6, 12])
+  body('installmentMonths').isInt().isIn([3, 6, 12]),
+  body('orderNumber').optional().isString(),
 ], validate, saleController.processInstallmentSale);
+
+router.get('/orders/:orderNumber', requireTeller, saleController.getOrderByNumber);
+router.get('/returns', requireReportsAccess, saleController.listReturns);
+router.post(
+  '/returns',
+  [
+    requireTeller,
+    body('orderNumber').isString().notEmpty(),
+    body('lines').isArray({ min: 1 }),
+    body('reason').optional({ nullable: true }).isString(),
+    body('returnType').optional().isIn(['cash', 'defect', 'warranty']),
+  ],
+  validate,
+  saleController.processReturn
+);
 
 // Get top selling products
 router.get('/top', requireTeller, saleController.getTopProducts);
 
 // Get today's sales
 router.get('/today', requireTeller, saleController.getTodaySales);
+
+// Get recent sales (default last 7 days)
+router.get('/recent', requireTeller, saleController.getRecentSales);
 
 // Generic timeframe summary
 router.get('/summary', requireTeller, saleController.getSummaryByRange);

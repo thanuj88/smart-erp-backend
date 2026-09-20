@@ -1,4 +1,7 @@
-const { getPlatformRepository } = require('../repositories/factory');
+const { getPlatformRepository, getAuthRepository } = require('../repositories/factory');
+const staffUserService = require('../services/staffUserService');
+const tokenService = require('../services/tokenService');
+const { ROLES } = require('../config/permissions');
 
 const listTenants = async (req, res) => {
   try {
@@ -24,9 +27,9 @@ const createTenant = async (req, res) => {
   try {
     const { name, slug, planCode, adminUsername, adminEmail, adminPassword, adminFullName } =
       req.body;
-    if (!name || !adminUsername || !adminPassword) {
+    if (!name || !adminEmail || !adminPassword) {
       return res.status(400).json({
-        error: 'name, adminUsername, and adminPassword are required',
+        error: 'name, adminEmail, and adminPassword are required',
       });
     }
     if (adminPassword.length < 8) {
@@ -126,18 +129,40 @@ const listUsers = async (req, res) => {
 
 const createUser = async (req, res) => {
   try {
-    const { tenantId, username, email, password, role, fullName, branchId } = req.body;
-    if (!username || !password || !role) {
-      return res.status(400).json({ error: 'username, password, and role are required' });
+    const { tenantId, username, email, password, role, fullName, branchId, pin } = req.body;
+    if (!email || !password || !role) {
+      return res.status(400).json({ error: 'email, password, and role are required' });
     }
+
+    const resolvedTenantId =
+      tenantId === '' || tenantId === null || tenantId === undefined ? null : String(tenantId);
+
+    let prepared;
+    try {
+      prepared = await staffUserService.prepareStaffUserCreate({
+        tenantId: resolvedTenantId,
+        username,
+        email,
+        role,
+      });
+    } catch (err) {
+      return res.status(err.statusCode || 400).json({ error: err.message });
+    }
+
+    let pinHash = null;
+    if (pin && prepared.normalizedRole === ROLES.TELLER) {
+      pinHash = await tokenService.hashPin(pin);
+    }
+
     const user = await getPlatformRepository().createPlatformUser({
-      tenantId: tenantId || null,
-      username,
-      email,
+      tenantId: prepared.normalizedRole === ROLES.SUPER_ADMIN ? null : prepared.tenantId,
+      username: prepared.finalUsername,
+      email: prepared.normalizedEmail,
       password,
-      role,
+      role: prepared.normalizedRole,
       fullName,
       branchId,
+      pinHash,
     });
     res.status(201).json(user);
   } catch (error) {
@@ -147,6 +172,19 @@ const createUser = async (req, res) => {
 
 const updateUser = async (req, res) => {
   try {
+    const { role } = req.body;
+    if (role) {
+      const existing = await getAuthRepository().findUserById(req.params.id);
+      if (!existing) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      try {
+        await staffUserService.assertStaffRoleChange(existing.tenant_id, role, existing.role);
+      } catch (err) {
+        return res.status(err.statusCode || 403).json({ error: err.message });
+      }
+    }
+
     const user = await getPlatformRepository().updatePlatformUser(req.params.id, req.body);
     res.json(user);
   } catch (error) {

@@ -46,9 +46,26 @@ function localPartFromInput(tenantMeta, usernameInput) {
   return raw;
 }
 
+function normalizeEmail(email) {
+  return String(email || '').trim().toLowerCase();
+}
+
+function localPartFromEmail(email) {
+  return normalizePart(String(email || '').split('@')[0]) || 'user';
+}
+
+function usernameFromEmail(tenantMeta, email) {
+  const local = localPartFromEmail(email);
+  if (!tenantMeta) return local;
+  return buildStaffUsername(tenantMeta, local);
+}
+
 module.exports = {
   normalizePart,
   buildTenantPrefix,
   buildStaffUsername,
   localPartFromInput,
+  normalizeEmail,
+  localPartFromEmail,
+  usernameFromEmail,
 };

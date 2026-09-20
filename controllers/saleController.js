@@ -1,7 +1,9 @@
 const path = require('path');
 const fs = require('fs');
 const orderService = require('../services/orderService');
+const customerService = require('../services/customerService');
 const { resolveTenantId } = require('../utils/tenant');
+const { validateDistinctCustomerAndWitness, validateNicNumbers, normalizeNic } = require('../utils/installmentValidation');
 
 const saveImage = (base64Data, folder, filename) => {
   if (!base64Data) return null;
@@ -26,11 +28,22 @@ const handleSaleError = (res, error) => {
 
 const processCashSale = async (req, res) => {
   try {
-    const { itemId, quantity } = req.body;
+    const { itemId, quantity, orderNumber, customerPhone } = req.body;
     if (!itemId || !quantity || quantity <= 0) {
       return res.status(400).json({ error: 'Valid itemId and quantity are required' });
     }
-    const sale = await orderService.processCashSale(resolveTenantId(req), req.user, { itemId, quantity });
+    const tenantId = resolveTenantId(req);
+    const member = customerPhone
+      ? await customerService.lookupByPhone(tenantId, customerPhone)
+      : null;
+    const sale = await orderService.processCashSale(tenantId, req.user, {
+      itemId,
+      quantity,
+      orderNumber,
+      customerId: member?.id || null,
+      customerName: member?.name || null,
+      customerPhone: member?.phone || null,
+    });
     res.status(201).json(sale);
   } catch (error) {
     return handleSaleError(res, error);
@@ -39,14 +52,48 @@ const processCashSale = async (req, res) => {
 
 const processInstallmentSale = async (req, res) => {
   try {
-    const { itemId, quantity, customer, witness, downPayment, installmentMonths } = req.body;
-    if (!itemId || !quantity || !customer || !witness || downPayment === undefined || !installmentMonths) {
+    const { itemId, quantity, customer, witness, downPayment, installmentMonths, orderNumber } = req.body;
+    const includeWitness = req.body.includeWitness !== false;
+    if (!itemId || !quantity || !customer || downPayment === undefined || !installmentMonths) {
       return res.status(400).json({ error: 'All fields are required for installment sale' });
     }
+    if (!String(customer.phone || '').trim()) {
+      return res.status(400).json({ error: 'Customer phone number is required' });
+    }
+    if (includeWitness && (!witness || typeof witness !== 'object')) {
+      return res.status(400).json({ error: 'Witness details are required' });
+    }
+    const nicError = validateNicNumbers(customer, witness, { requireWitness: includeWitness });
+    if (nicError) {
+      return res.status(400).json({ error: nicError });
+    }
+    if (includeWitness) {
+      const witnessError = validateDistinctCustomerAndWitness(customer, witness);
+      if (witnessError) {
+        return res.status(400).json({ error: witnessError });
+      }
+    }
+    const tenantId = resolveTenantId(req);
+    const member = await customerService.lookupByPhone(tenantId, customer.phone);
     const result = await orderService.processInstallmentSale(
-      resolveTenantId(req),
+      tenantId,
       req.user,
-      { itemId, quantity, customer, witness, downPayment, installmentMonths },
+      {
+        itemId,
+        quantity,
+        customer: {
+          ...customer,
+          idCardNo: normalizeNic(customer.idCardNo ?? customer.id_card_no),
+          memberId: member?.id || null,
+        },
+        witness: includeWitness
+          ? { ...witness, idCardNo: normalizeNic(witness.idCardNo ?? witness.id_card_no) }
+          : null,
+        includeWitness,
+        downPayment,
+        installmentMonths,
+        orderNumber,
+      },
       saveImage
     );
     res.status(201).json(result);
@@ -78,6 +125,16 @@ const getAllSales = async (req, res) => {
 const getTodaySales = async (req, res) => {
   try {
     const sales = await orderService.getToday(resolveTenantId(req), req.user);
+    res.json(sales);
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const getRecentSales = async (req, res) => {
+  try {
+    const days = Number(req.query.days) || 7;
+    const sales = await orderService.getRecent(resolveTenantId(req), req.user, days);
     res.json(sales);
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
@@ -169,12 +226,50 @@ const getSalesTrend = async (req, res) => {
   }
 };
 
+const getOrderByNumber = async (req, res) => {
+  try {
+    const order = await orderService.getOrderByNumber(resolveTenantId(req), req.params.orderNumber);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    res.json(order);
+  } catch (error) {
+    return handleSaleError(res, error);
+  }
+};
+
+const listReturns = async (req, res) => {
+  try {
+    const returns = await orderService.listReturns(resolveTenantId(req));
+    res.json(returns);
+  } catch (error) {
+    return handleSaleError(res, error);
+  }
+};
+
+const processReturn = async (req, res) => {
+  try {
+    const { orderNumber, lines, reason, returnType } = req.body;
+    if (!orderNumber || !Array.isArray(lines) || !lines.length) {
+      return res.status(400).json({ error: 'orderNumber and at least one return line are required' });
+    }
+    const result = await orderService.processReturn(resolveTenantId(req), req.user, {
+      orderNumber,
+      lines,
+      reason,
+      returnType,
+    });
+    res.status(201).json(result);
+  } catch (error) {
+    return handleSaleError(res, error);
+  }
+};
+
 module.exports = {
   processCashSale,
   processInstallmentSale,
   getTopProducts,
   getAllSales,
   getTodaySales,
+  getRecentSales,
   getSalesByDateRange,
   getDailySummary,
   getWeeklySummary,
@@ -182,4 +277,7 @@ module.exports = {
   getOverallSummary,
   getSummaryByRange,
   getSalesTrend,
+  getOrderByNumber,
+  listReturns,
+  processReturn,
 };

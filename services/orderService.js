@@ -14,6 +14,10 @@ class OrderService {
     return this.repo.getToday(tenantId, user.id, isAdminUser(user));
   }
 
+  getRecent(tenantId, user, days = 7) {
+    return this.repo.getRecent(tenantId, user.id, isAdminUser(user), days);
+  }
+
   getByDateRange(tenantId, startDate, endDate) {
     return this.repo.getByDateRange(tenantId, startDate, endDate);
   }
@@ -52,6 +56,18 @@ class OrderService {
 
   getSalesTrend(tenantId, range) {
     return this.repo.getSalesTrend(tenantId, range);
+  }
+
+  getOrderByNumber(tenantId, orderNumber) {
+    return this.repo.getOrderByNumber(tenantId, orderNumber);
+  }
+
+  listReturns(tenantId) {
+    return this.repo.listReturns(tenantId);
+  }
+
+  processReturn(tenantId, user, payload) {
+    return this.repo.processReturn(tenantId, user, payload);
   }
 }
 

@@ -1,4 +1,4 @@
-const { PutCommand, GetCommand, UpdateCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
+const { PutCommand, GetCommand, UpdateCommand, QueryCommand, DeleteCommand } = require('@aws-sdk/lib-dynamodb');
 const { getDynamoClient } = require('../../config/dynamodb');
 const databaseConfig = require('../../config/dataStore');
 const { tenantPk, entitySk } = require('../../utils/tenant');
@@ -11,6 +11,7 @@ const authConfig = require('../../config/auth');
 const { ROLES } = require('../../config/permissions');
 const ENTITY = require('../entityTypes');
 const BaseDynamoRepository = require('./baseDynamoRepository');
+const { usernameFromEmail, normalizeEmail } = require('../../utils/staffUsername');
 
 const PLATFORM_TENANT = 0;
 const META_SK = 'METADATA';
@@ -77,6 +78,38 @@ class AuthDynamoRepository {
     );
   }
 
+  async _deleteLookup(type, value) {
+    const sk = lookupSk(type, value);
+    await Promise.all(
+      PLATFORM_INDEX_PKS.map((pk) =>
+        this.client
+          .send(
+            new DeleteCommand({
+              TableName: this.tableName,
+              Key: { PK: pk, SK: sk },
+            })
+          )
+          .catch(() => {})
+      )
+    );
+  }
+
+  async uniqueUsernameFromEmail(tenantMeta, email) {
+    const base = usernameFromEmail(tenantMeta, email);
+    let candidate = base;
+    let n = 2;
+    while (await this.findUserByUsernameOrEmail(candidate)) {
+      candidate = `${base}-${n}`;
+      n += 1;
+      if (n > 99) {
+        const err = new Error('Could not generate a unique account name from this email');
+        err.code = 'USERNAME_GENERATE_FAILED';
+        throw err;
+      }
+    }
+    return candidate;
+  }
+
   async _slugExists(slug) {
     const sk = lookupSk('SLUG', slug);
     for (const pk of PLATFORM_INDEX_PKS) {
@@ -106,6 +139,44 @@ class AuthDynamoRepository {
       slug: res.Item.slug,
       status: res.Item.status,
     };
+  }
+
+  async updateTenantDisplayName(tenantId, name) {
+    const trimmed = String(name || '').trim();
+    if (tenantId == null || tenantId === '' || !trimmed) return;
+
+    const now = new Date().toISOString();
+    try {
+      await this.client.send(
+        new UpdateCommand({
+          TableName: this.tableName,
+          Key: { PK: tenantPk(tenantId), SK: META_SK },
+          UpdateExpression: 'SET #n = :name',
+          ExpressionAttributeNames: { '#n': 'name' },
+          ExpressionAttributeValues: { ':name': trimmed },
+          ConditionExpression: 'attribute_exists(PK)',
+        })
+      );
+    } catch {
+      /* tenant metadata may be missing on older records */
+    }
+
+    await Promise.all(
+      PLATFORM_INDEX_PKS.map((pk) =>
+        this.client
+          .send(
+            new UpdateCommand({
+              TableName: this.tableName,
+              Key: { PK: pk, SK: `TENANT_REF#${tenantId}` },
+              UpdateExpression: 'SET #n = :name, updatedAt = :u',
+              ExpressionAttributeNames: { '#n': 'name' },
+              ExpressionAttributeValues: { ':name': trimmed, ':u': now },
+              ConditionExpression: 'attribute_exists(PK)',
+            })
+          )
+          .catch(() => {})
+      )
+    );
   }
 
   async uniqueSlug(base) {
@@ -141,24 +212,32 @@ class AuthDynamoRepository {
     };
   }
 
+  _matchesIdentity(user, identifier) {
+    const id = String(identifier || '').trim().toLowerCase();
+    if (!id) return false;
+    return (
+      String(user.email || '').toLowerCase() === id ||
+      String(user.username || '').toLowerCase() === id
+    );
+  }
+
   async findUserByUsernameOrEmail(identifier, tenantId = null) {
+    const id = String(identifier || '').trim().toLowerCase();
+    if (!id) return null;
+
     if (tenantId) {
       const users = await this.users.queryByTenant(tenantId, {
-        filter: (u) =>
-          !u.deleted_at &&
-          (u.username === identifier || u.email === identifier),
+        filter: (u) => !u.deleted_at && this._matchesIdentity(u, id),
       });
       return users[0] ? this._normalizeUser(users[0]) : null;
     }
 
-    const byUser = await this._getLookup('USERNAME', identifier);
-    const byEmail = await this._getLookup('EMAIL', identifier);
-    const ref = byUser || byEmail;
+    const byEmail = await this._getLookup('EMAIL', id);
+    const byUser = await this._getLookup('USERNAME', id);
+    const ref = byEmail || byUser;
     if (!ref) {
       const users = await this.users.queryByTenant(databaseConfig.defaultTenantId, {
-        filter: (u) =>
-          !u.deleted_at &&
-          (u.username === identifier || u.email === identifier),
+        filter: (u) => !u.deleted_at && this._matchesIdentity(u, id),
       });
       return users[0] ? this._normalizeUser(users[0]) : null;
     }
@@ -166,19 +245,22 @@ class AuthDynamoRepository {
   }
 
   async findUserById(id, tenantIdHint = null) {
-    if (tenantIdHint != null) {
-      const u = await this.users.getById(tenantIdHint, id);
-      if (u && !u.deleted_at) return this._normalizeUser(u);
-      return null;
+    const tenantIds = [];
+    if (tenantIdHint != null && tenantIdHint !== '') {
+      tenantIds.push(String(tenantIdHint));
     }
-    const tenants = [databaseConfig.defaultTenantId, PLATFORM_TENANT];
-    for (const t of tenants) {
-      const u = await this.users.getById(t, id);
+    tenantIds.push(String(PLATFORM_TENANT));
+    tenantIds.push(String(databaseConfig.defaultTenantId));
+
+    for (const tid of await this._listTenantIds()) {
+      if (!tenantIds.includes(tid)) tenantIds.push(tid);
+    }
+
+    for (const tenantId of tenantIds) {
+      const u = await this.users.getById(tenantId, id);
       if (u && !u.deleted_at) return this._normalizeUser(u);
     }
-    const all = await this.users.queryByTenant(databaseConfig.defaultTenantId);
-    const found = all.find((u) => String(u.id) === String(id) && !u.deleted_at);
-    return found ? this._normalizeUser(found) : null;
+    return null;
   }
 
   async findUserWithPassword(id, tenantIdHint = null) {
@@ -203,15 +285,36 @@ class AuthDynamoRepository {
     return res.Item || null;
   }
 
+  async getSubscriptionForTenant(tenantId) {
+    const res = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: { PK: tenantPk(tenantId), SK: SUBSCRIPTION_SK },
+      })
+    );
+    return res.Item || null;
+  }
+
   async isTrialExpired(tenantId) {
+    const subscription = await this.getSubscriptionForTenant(tenantId);
+    if (
+      subscription?.plan_code &&
+      subscription.plan_code !== 'trial' &&
+      subscription.status === 'active'
+    ) {
+      return false;
+    }
     const trial = await this.getTrialForTenant(tenantId);
-    if (!trial) return false;
+    if (!trial || trial.status === 'converted') return false;
     if (trial.status === 'expired') return true;
     return new Date(trial.ends_at) < new Date();
   }
 
-  async registerTenantOwner({ businessName, fullName, email, username, passwordHash }) {
+  async registerTenantOwner({ businessName, fullName, email, username, passwordHash, phone, countryCode }) {
     const slug = await this.uniqueSlug(businessName || email);
+    const ownerEmail = normalizeEmail(email);
+    const ownerUsername =
+      username || (await this.uniqueUsernameFromEmail({ slug, tenantId: null }, ownerEmail));
     const tenantId = `${Date.now()}`;
     const branchId = `${Date.now()}1`;
     const userId = `${Date.now()}2`;
@@ -276,16 +379,18 @@ class AuthDynamoRepository {
     await this.users.put(tenantId, userId, {
       tenant_id: tenantId,
       branch_id: branchId,
-      username,
-      email,
+      username: ownerUsername,
+      email: ownerEmail,
       password: passwordHash,
       full_name: fullName,
+      phone: phone || null,
+      country_code: countryCode || null,
       role: ROLES.TENANT_ADMIN,
       is_active: 0,
     });
 
-    await this._putLookup('USERNAME', username, tenantId, userId);
-    await this._putLookup('EMAIL', email, tenantId, userId);
+    await this._putLookup('USERNAME', ownerUsername, tenantId, userId);
+    await this._putLookup('EMAIL', ownerEmail, tenantId, userId);
 
     await this.client.send(
       new PutCommand({
@@ -491,10 +596,10 @@ class AuthDynamoRepository {
     });
   }
 
-  _matchesPinLoginUser(u, username, branchId) {
+  _matchesPinLoginUser(u, identifier, branchId) {
     return (
       !u.deleted_at &&
-      String(u.username).toLowerCase() === String(username).toLowerCase() &&
+      this._matchesIdentity(u, identifier) &&
       u.role === ROLES.TELLER &&
       (u.is_active === 1 || u.is_active === true) &&
       u.email_verified_at &&
@@ -503,10 +608,13 @@ class AuthDynamoRepository {
     );
   }
 
-  async findUserForPinLogin(username, tenantId, branchId) {
-    const normalized = String(username).trim().toLowerCase();
+  async findUserForPinLogin(identifier, tenantId, branchId) {
+    const normalized = String(identifier || '').trim().toLowerCase();
+    if (!normalized) return null;
 
-    const ref = await this._getLookup('USERNAME', normalized);
+    const byEmail = await this._getLookup('EMAIL', normalized);
+    const byUser = await this._getLookup('USERNAME', normalized);
+    const ref = byEmail || byUser;
     if (ref?.userId) {
       const user = await this.findUserWithPassword(ref.userId, ref.tenantId);
       if (user && this._matchesPinLoginUser(user, normalized, branchId)) {
@@ -621,12 +729,18 @@ class AuthDynamoRepository {
   }
 
   async createStaffUser({ tenantId, branchId, username, email, hashedPassword, role, fullName, pinHash, isActive }) {
+    const userEmail = normalizeEmail(email);
+    if (!userEmail) {
+      const err = new Error('Email is required');
+      err.statusCode = 400;
+      throw err;
+    }
     const userId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
     await this.users.put(tenantId, userId, {
       tenant_id: tenantId,
       branch_id: branchId,
       username,
-      email,
+      email: userEmail,
       password: hashedPassword,
       full_name: fullName || username,
       role,
@@ -635,17 +749,19 @@ class AuthDynamoRepository {
       email_verified_at: isActive ? new Date().toISOString() : null,
     });
     await this._putLookup('USERNAME', username, tenantId, userId);
-    if (email) await this._putLookup('EMAIL', email, tenantId, userId);
+    await this._putLookup('EMAIL', userEmail, tenantId, userId);
     return this.findUserById(userId);
   }
 
-  async updateStaffUser(id, { username, role, fullName, branchId, pinHash }) {
+  async updateStaffUser(id, { username, email, role, fullName, branchId, pinHash }) {
     const user = await this.findUserWithPassword(id);
     if (!user) return null;
     const tenantId = user.tenant_id ?? PLATFORM_TENANT;
     const nextUsername = username ?? user.username;
+    const nextEmail = email != null ? normalizeEmail(email) : user.email;
     const data = {
       username: nextUsername,
+      email: nextEmail,
       role: role ?? user.role,
       full_name: fullName ?? user.full_name,
       branch_id: branchId !== undefined ? branchId : user.branch_id,
@@ -653,7 +769,12 @@ class AuthDynamoRepository {
     if (pinHash !== undefined) data.pin_hash = pinHash;
     await this.users.update(tenantId, id, data);
     if (username && String(username).toLowerCase() !== String(user.username).toLowerCase()) {
+      await this._deleteLookup('USERNAME', user.username);
       await this._putLookup('USERNAME', nextUsername, tenantId, id);
+    }
+    if (email != null && nextEmail !== normalizeEmail(user.email)) {
+      if (user.email) await this._deleteLookup('EMAIL', user.email);
+      await this._putLookup('EMAIL', nextEmail, tenantId, id);
     }
     return this.findUserById(id);
   }
