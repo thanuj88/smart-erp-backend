@@ -22,11 +22,91 @@ class OrderDynamoRepository extends BaseDynamoRepository {
   _inRange(saleDate, range) {
     const d = new Date(saleDate);
     const now = new Date();
-    if (range === 'week' || range === '1W') return d >= new Date(now.getTime() - 7 * 86400000);
+    if (range === '1D' || range === 'day') return this._today(saleDate);
+    if (range === 'week' || range === '1W') {
+      const start = new Date(now);
+      start.setHours(0, 0, 0, 0);
+      start.setDate(start.getDate() - 6);
+      return d >= start;
+    }
     if (range === 'month' || range === '1M') return d >= new Date(now.getFullYear(), now.getMonth(), 1);
-    if (range === '3M') return d >= new Date(now.getFullYear(), now.getMonth() - 3, 1);
-    if (range === '6M') return d >= new Date(now.getFullYear(), now.getMonth() - 6, 1);
-    return d >= new Date(now.getFullYear() - 1, now.getMonth(), 1);
+    if (range === '3M') return d >= new Date(now.getFullYear(), now.getMonth() - 2, 1);
+    if (range === '6M') return d >= new Date(now.getFullYear(), now.getMonth() - 5, 1);
+    return d >= new Date(now.getFullYear(), now.getMonth() - 11, 1);
+  }
+
+  _saleCost(sale) {
+    const qty = Number(sale.quantity) || 0;
+    const buy = Number(sale.buying_price) || 0;
+    if (buy > 0) return buy * qty;
+    const total = Number(sale.total) || 0;
+    const profit = Number(sale.profit) || 0;
+    return Math.max(0, total - profit);
+  }
+
+  _saleRevenue(sale) {
+    if (this._isReturnSale(sale)) return 0;
+    return Number(sale.total) || 0;
+  }
+
+  _enumerateTrendBuckets(range) {
+    const now = new Date();
+    const buckets = [];
+    const push = (start, end, label) => {
+      buckets.push({ start, end, label, sales: 0, purchase: 0 });
+    };
+
+    if (range === '1D') {
+      for (let hour = 8; hour <= 19; hour += 1) {
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, 0, 0, 0);
+        const end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour + 1, 0, 0, 0);
+        push(start, end, start.toLocaleTimeString(undefined, { hour: 'numeric' }));
+      }
+      return buckets;
+    }
+
+    if (range === '1W') {
+      for (let i = 6; i >= 0; i -= 1) {
+        const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 0, 0, 0, 0);
+        const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i + 1, 0, 0, 0, 0);
+        push(start, end, start.toLocaleDateString(undefined, { weekday: 'short' }));
+      }
+      return buckets;
+    }
+
+    if (range === '1M') {
+      const lastDay = now.getDate();
+      for (let day = 1; day <= lastDay; day += 1) {
+        const start = new Date(now.getFullYear(), now.getMonth(), day, 0, 0, 0, 0);
+        const end = new Date(now.getFullYear(), now.getMonth(), day + 1, 0, 0, 0, 0);
+        push(start, end, String(day));
+      }
+      return buckets;
+    }
+
+    if (range === '3M') {
+      const cursor = new Date(now.getFullYear(), now.getMonth() - 2, 1, 0, 0, 0, 0);
+      while (cursor <= now) {
+        const start = new Date(cursor);
+        const end = new Date(cursor);
+        end.setDate(end.getDate() + 7);
+        push(
+          start,
+          end,
+          start.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+        );
+        cursor.setDate(cursor.getDate() + 7);
+      }
+      return buckets;
+    }
+
+    const monthCount = range === '6M' ? 6 : 12;
+    for (let i = monthCount - 1; i >= 0; i -= 1) {
+      const start = new Date(now.getFullYear(), now.getMonth() - i, 1, 0, 0, 0, 0);
+      const end = new Date(now.getFullYear(), now.getMonth() - i + 1, 1, 0, 0, 0, 0);
+      push(start, end, start.toLocaleDateString(undefined, { month: 'short' }));
+    }
+    return buckets;
   }
 
   _today(saleDate) {
@@ -322,10 +402,12 @@ class OrderDynamoRepository extends BaseDynamoRepository {
 
     const cashRevenue =
       cashSales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0) + cashReturnTotal;
+    const totalPurchase = regularSales.reduce((sum, sale) => sum + this._saleCost(sale), 0);
 
     return {
       total_sales: cashSales.length,
       total_revenue: cashRevenue,
+      total_purchase: totalPurchase,
       total_items_sold: regularSales.reduce((sum, sale) => sum + (sale.quantity || 0), 0),
       total_profit:
         cashSales.reduce((sum, sale) => sum + (Number(sale.profit) || 0), 0) + cashReturnProfit,
@@ -368,22 +450,28 @@ class OrderDynamoRepository extends BaseDynamoRepository {
   }
 
   async getSummaryByRange(tenantId, range) {
-    return this._buildIncomeSummary(tenantId, (d) => this._inRange(d, range), null, true);
+    const summary = await this._buildIncomeSummary(tenantId, (d) => this._inRange(d, range), null, true);
+    const all = await this.getAll(tenantId);
+    const inRange = all.filter((s) => this._inRange(s.sale_date, range) && !this._isReturnSale(s));
+    return {
+      ...summary,
+      total_revenue: inRange.reduce((sum, sale) => sum + this._saleRevenue(sale), 0),
+      total_purchase: inRange.reduce((sum, sale) => sum + this._saleCost(sale), 0),
+    };
   }
 
   async getSalesTrend(tenantId, range) {
     const all = await this.getAll(tenantId);
-    const buckets = {};
-    all.filter((s) => this._inRange(s.sale_date, range)).forEach((s) => {
-      const d = new Date(s.sale_date);
-      const key =
-        range === '1W' ? d.toISOString().slice(0, 10) : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      if (!buckets[key]) buckets[key] = { period: key, revenue: 0, profit: 0, sales: 0 };
-      buckets[key].revenue += s.total || 0;
-      buckets[key].profit += s.profit || 0;
-      if (!this._isReturnSale(s)) buckets[key].sales += 1;
+    const buckets = this._enumerateTrendBuckets(range);
+    all.forEach((sale) => {
+      if (this._isReturnSale(sale)) return;
+      const when = new Date(sale.sale_date);
+      const bucket = buckets.find((item) => when >= item.start && when < item.end);
+      if (!bucket) return;
+      bucket.sales += this._saleRevenue(sale);
+      bucket.purchase += this._saleCost(sale);
     });
-    return Object.values(buckets);
+    return buckets.map(({ label, sales, purchase }) => ({ label, sales, purchase }));
   }
 
   _mapSaleLine(sale) {

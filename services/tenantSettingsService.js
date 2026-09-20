@@ -14,6 +14,21 @@ const { DEFAULT_RECEIPT, normalizeReceipt, mergeReceipt, saveReceiptLogo } = req
 
 const SETTINGS_SK = 'SETTINGS';
 
+const DEFAULT_DASHBOARD_WIDGETS = {
+  cashRevenue: true,
+  installmentIn: true,
+  actualIncome: true,
+  cashProfit: true,
+  salesChart: true,
+  categoryMix: true,
+  overduePlans: true,
+  lowStockBanner: true,
+  outOfStock: true,
+  deadStock: true,
+  lowStock: true,
+  topProducts: true,
+};
+
 const DEFAULTS = {
   businessName: '',
   currencyCode: DEFAULT_CURRENCY_CODE,
@@ -22,7 +37,18 @@ const DEFAULTS = {
   taxRate: 0,
   lowStockThreshold: 15,
   receiptFooter: DEFAULT_RECEIPT.footer,
+  dashboardWidgets: { ...DEFAULT_DASHBOARD_WIDGETS },
 };
+
+function normalizeDashboardWidgets(raw) {
+  const next = { ...DEFAULT_DASHBOARD_WIDGETS };
+  if (!raw || typeof raw !== 'object') return next;
+  Object.keys(DEFAULT_DASHBOARD_WIDGETS).forEach((key) => {
+    if (raw[key] === false) next[key] = false;
+    if (raw[key] === true) next[key] = true;
+  });
+  return next;
+}
 
 function normalizeSettings(item, tenantMeta) {
   const code = item?.currency_code || item?.currencyCode || DEFAULT_CURRENCY_CODE;
@@ -51,6 +77,7 @@ function normalizeSettings(item, tenantMeta) {
     ),
     receipt,
     receiptFooter: receipt.footer,
+    dashboardWidgets: normalizeDashboardWidgets(item?.dashboard_widgets || item?.dashboardWidgets),
     currency: { code: preset.code, symbol },
   };
 }
@@ -108,6 +135,11 @@ async function updateForTenant(tenantId, payload) {
       ? Number(payload.lowStockThreshold)
       : current.lowStockThreshold;
 
+  const dashboardWidgets =
+    payload.dashboardWidgets != null
+      ? normalizeDashboardWidgets(payload.dashboardWidgets)
+      : current.dashboardWidgets;
+
   const receipt = mergeReceipt(current.receipt || DEFAULT_RECEIPT, payload);
   if (payload.removeReceiptLogo) {
     receipt.logo = null;
@@ -131,6 +163,7 @@ async function updateForTenant(tenantId, payload) {
     low_stock_threshold: Number.isFinite(lowStockThreshold) ? lowStockThreshold : DEFAULTS.lowStockThreshold,
     receipt,
     receipt_footer: receipt.footer,
+    dashboard_widgets: dashboardWidgets,
     updatedAt: new Date().toISOString(),
   };
 

@@ -8,6 +8,7 @@
     "dev": "nodemon server.js",
     "init-dynamo": "node scripts/initDynamoTable.js",
     "seed-dynamo": "node scripts/seedDynamo.js",
+    "seed-catalog": "node scripts/seedBrightMartCatalog.js",
     "dynamo:up": "node scripts/startDynamoLocal.js",
     "dynamo:up:docker": "docker compose up -d",
     "dynamo:down:docker": "docker compose stop"
