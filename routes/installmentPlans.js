@@ -1,8 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate, requireAdmin } = require('../middleware/auth');
-const requirePermission = require('../middleware/requirePermission');
-const { PERMISSIONS } = require('../config/permissions');
+const { canWorkInstallments } = require('../middleware/installmentAccess');
 const {
   getAllPlans,
   getPlanById,
@@ -11,36 +10,21 @@ const {
   updatePlanStatus
 } = require('../controllers/installmentPlanController');
 
-// Collecting at the till (POS "Payment" mode needs active plans + plan detail for the receipt).
-const canCollect = requirePermission(
-  PERMISSIONS.SALES_CREATE,
-  PERMISSIONS.REPORTS_VIEW,
-  PERMISSIONS.USERS_MANAGE,
-  PERMISSIONS.PLATFORM_MANAGE
-);
-
-// Store-wide plan history (all / completed): owner / manager / accountant only, not tellers.
-const canViewAllPlans = requirePermission(
-  PERMISSIONS.REPORTS_VIEW,
-  PERMISSIONS.USERS_VIEW,
-  PERMISSIONS.USERS_MANAGE,
-  PERMISSIONS.PLATFORM_MANAGE
-);
-
-// All routes require authentication
+// All routes require authentication and an installment-capable role
 router.use(authenticate);
+router.use(canWorkInstallments);
 
-// GET /api/installment-plans - Get all installment plans (back office only)
-router.get('/', canViewAllPlans, getAllPlans);
+// GET /api/installment-plans - Get all installment plans
+router.get('/', getAllPlans);
 
-// GET /api/installment-plans/active - Get active plans (POS payment mode needs this)
-router.get('/active', canCollect, getActivePlans);
+// GET /api/installment-plans/active - Get active plans
+router.get('/active', getActivePlans);
 
-// GET /api/installment-plans/completed - Get completed plans (back office only)
-router.get('/completed', canViewAllPlans, getCompletedPlans);
+// GET /api/installment-plans/completed - Get completed plans
+router.get('/completed', getCompletedPlans);
 
 // GET /api/installment-plans/:id - Get plan by ID with payments
-router.get('/:id', canCollect, getPlanById);
+router.get('/:id', getPlanById);
 
 // PUT /api/installment-plans/:id/status - Update plan status (Admin only)
 router.put('/:id/status', requireAdmin, updatePlanStatus);
