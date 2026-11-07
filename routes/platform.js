@@ -30,8 +30,8 @@ router.get('/plans', requirePermission(...platform), platformController.listPlan
 router.post('/plans', requirePermission(PERMISSIONS.PLATFORM_MANAGE), platformController.createPlan);
 router.put('/plans/:code', requirePermission(PERMISSIONS.PLATFORM_MANAGE), platformController.updatePlan);
 
-// Platform users (all tenants)
-router.get('/users', requirePermission(PERMISSIONS.PLATFORM_MANAGE, PERMISSIONS.USERS_MANAGE), platformController.listUsers);
+// Platform users (all tenants). Platform-only: tenant `users:manage` must never reach this list.
+router.get('/users', requirePermission(PERMISSIONS.PLATFORM_MANAGE), platformController.listUsers);
 router.post('/users', requirePermission(PERMISSIONS.PLATFORM_MANAGE), platformController.createUser);
 router.put('/users/:id', requirePermission(PERMISSIONS.PLATFORM_MANAGE), platformController.updateUser);
 
