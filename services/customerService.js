@@ -1,5 +1,6 @@
 const { getCustomerRepository } = require('../repositories/factory');
 const installmentPlanService = require('./installmentPlanService');
+const installmentPaymentService = require('./installmentPaymentService');
 const tenantSettingsService = require('./tenantSettingsService');
 const {
   memberPhoneKey,
@@ -92,7 +93,14 @@ class CustomerService {
   async lookupByPhone(tenantId, phone) {
     const countryCode = await this.countryCode(tenantId);
     if (!memberPhoneKey(phone, countryCode)) return null;
-    return this.repo.getByPhone(tenantId, phone, null, countryCode);
+    const customer = await this.repo.getByPhone(tenantId, phone, null, countryCode);
+    if (!customer) return null;
+    const overdue = await installmentPaymentService.getOverdueSummaryForCustomer(
+      tenantId,
+      customer,
+      countryCode
+    );
+    return { ...customer, overdue };
   }
 
   async create(tenantId, data) {

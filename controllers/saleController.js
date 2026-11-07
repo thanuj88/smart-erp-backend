@@ -4,6 +4,7 @@ const orderService = require('../services/orderService');
 const customerService = require('../services/customerService');
 const { resolveTenantId } = require('../utils/tenant');
 const { validateDistinctCustomerAndWitness, validateNicNumbers, normalizeNic } = require('../utils/installmentValidation');
+const { parseInstallmentLines } = require('../utils/installmentLines');
 
 const saveImage = (base64Data, folder, filename) => {
   if (!base64Data) return null;
@@ -52,9 +53,10 @@ const processCashSale = async (req, res) => {
 
 const processInstallmentSale = async (req, res) => {
   try {
-    const { itemId, quantity, customer, witness, downPayment, installmentMonths, orderNumber } = req.body;
+    const { customer, witness, downPayment, installmentMonths, orderNumber } = req.body;
     const includeWitness = req.body.includeWitness !== false;
-    if (!itemId || !quantity || !customer || downPayment === undefined || !installmentMonths) {
+    const lines = parseInstallmentLines(req.body);
+    if (!customer || downPayment === undefined || !installmentMonths) {
       return res.status(400).json({ error: 'All fields are required for installment sale' });
     }
     if (!String(customer.phone || '').trim()) {
@@ -79,8 +81,7 @@ const processInstallmentSale = async (req, res) => {
       tenantId,
       req.user,
       {
-        itemId,
-        quantity,
+        lines,
         customer: {
           ...customer,
           idCardNo: normalizeNic(customer.idCardNo ?? customer.id_card_no),

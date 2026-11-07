@@ -20,8 +20,11 @@ router.post('/cash', [
 // Process an installment sale (Teller and Admin)
 router.post('/installment', [
   requireTeller,
-  body('itemId').isInt(),
-  body('quantity').isInt({ min: 1 }),
+  body('itemId').not().exists().withMessage('Use lines instead of itemId'),
+  body('quantity').not().exists().withMessage('Use lines instead of quantity'),
+  body('lines').isArray({ min: 1 }),
+  body('lines.*.itemId').exists({ checkFalsy: true }),
+  body('lines.*.quantity').isInt({ min: 1 }),
   body('customer').isObject(),
   body('includeWitness').optional().isBoolean(),
   body('witness').optional({ nullable: true }).isObject(),

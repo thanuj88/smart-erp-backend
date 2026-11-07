@@ -52,6 +52,7 @@ const lookupCustomerByPhone = async (req, res) => {
       email: customer.email || '',
       address: customer.address || '',
       id_card_no: customer.id_card_no || '',
+      overdue: customer.overdue || { count: 0, plans: 0, amount: 0 },
     });
   } catch (error) {
     handleServiceError(res, error, 'Lookup customer error:');

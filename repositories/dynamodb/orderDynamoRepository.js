@@ -243,8 +243,23 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     return this.fromRecord(saleItem);
   }
 
+  _planMatchesTeller(plan, tellerSaleIds) {
+    const ids = [
+      ...(Array.isArray(plan.sale_ids) ? plan.sale_ids : []),
+      plan.sale_id,
+    ]
+      .filter(Boolean)
+      .map(String);
+    return ids.some((id) => tellerSaleIds.has(id));
+  }
+
   async processInstallmentSale(tenantId, user, payload, saveImage) {
-    const { itemId, quantity, customer, witness, downPayment, installmentMonths, orderNumber } = payload;
+    const { customer, witness, downPayment, installmentMonths, orderNumber } = payload;
+    const lines = Array.isArray(payload.lines) ? payload.lines : [];
+    if (!lines.length) {
+      throw Object.assign(new Error('At least one bill line is required'), { status: 400 });
+    }
+
     const includeWitness = payload.includeWitness !== false && Boolean(witness);
     if (includeWitness) {
       const witnessError = validateDistinctCustomerAndWitness(customer, witness);
@@ -253,13 +268,30 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       }
     }
 
-    const item = await productDynamoRepository.getById(tenantId, itemId);
-    if (!item) throw Object.assign(new Error('Item not found'), { status: 404 });
-    if ((item.quantity ?? 0) < quantity) {
-      throw Object.assign(new Error('Insufficient stock'), { status: 400, available: item.quantity });
+    const resolvedLines = [];
+    for (const line of lines) {
+      const item = await productDynamoRepository.getById(tenantId, line.itemId);
+      if (!item) {
+        throw Object.assign(new Error(`Item not found: ${line.itemId}`), { status: 404 });
+      }
+      if ((item.quantity ?? 0) < line.quantity) {
+        throw Object.assign(
+          new Error(`Insufficient stock for ${item.name}`),
+          { status: 400, available: item.quantity }
+        );
+      }
+      const lineTotal = Number(item.selling_price) * line.quantity;
+      const lineProfit = (Number(item.selling_price) - Number(item.buying_price || 0)) * line.quantity;
+      resolvedLines.push({
+        itemId: line.itemId,
+        quantity: line.quantity,
+        item,
+        lineTotal,
+        lineProfit,
+      });
     }
 
-    const totalAmount = item.selling_price * quantity;
+    const totalAmount = resolvedLines.reduce((sum, line) => sum + line.lineTotal, 0);
     if (downPayment >= totalAmount) {
       throw Object.assign(new Error('Down payment must be less than total amount'), { status: 400 });
     }
@@ -271,7 +303,6 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     const interestAmount = (remainingAmount * settings.interest_rate) / 100;
     const totalWithInterest = remainingAmount + interestAmount;
     const monthlyPayment = totalWithInterest / installmentMonths;
-    const profit = (item.selling_price - item.buying_price) * quantity;
 
     const existingCustomer = customer.memberId
       ? await customerDynamoRepository.getById(tenantId, customer.memberId)
@@ -295,32 +326,41 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       witnessId = createdWitness.id;
     }
 
-    const saleId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const saleDate = new Date().toISOString();
-    const resolvedOrderNumber = resolveOrderNumber(orderNumber, saleId);
-    const sale = await this.put(tenantId, saleId, {
-      item_id: String(itemId),
-      item_name: item.name,
-      quantity,
-      buying_price: item.buying_price,
-      selling_price: item.selling_price,
-      price: item.price,
-      total: totalAmount,
-      profit,
-      payment_type: 'installment',
-      returned_qty: 0,
-      ...this._categoryFromProduct(item),
-      order_number: resolvedOrderNumber,
-      customer_id: customerId,
-      customer_name: customerName,
-      customer_phone: customerPhone,
-      teller_id: user.id,
-      teller_name: user.username,
-      sale_date: saleDate,
-    });
+    const firstSaleId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const resolvedOrderNumber = resolveOrderNumber(orderNumber, firstSaleId);
+    const sales = [];
 
+    for (let i = 0; i < resolvedLines.length; i += 1) {
+      const line = resolvedLines[i];
+      const saleId = i === 0 ? firstSaleId : `${Date.now()}${i}${Math.floor(Math.random() * 10000)}`;
+      const sale = await this.put(tenantId, saleId, {
+        item_id: String(line.itemId),
+        item_name: line.item.name,
+        quantity: line.quantity,
+        buying_price: line.item.buying_price,
+        selling_price: line.item.selling_price,
+        price: line.item.price,
+        total: line.lineTotal,
+        profit: line.lineProfit,
+        payment_type: 'installment',
+        returned_qty: 0,
+        ...this._categoryFromProduct(line.item),
+        order_number: resolvedOrderNumber,
+        customer_id: customerId,
+        customer_name: customerName,
+        customer_phone: customerPhone,
+        teller_id: user.id,
+        teller_name: user.username,
+        sale_date: saleDate,
+      });
+      sales.push(sale);
+    }
+
+    const saleIds = sales.map((sale) => sale.id);
     const plan = await installmentPlanDynamoRepository.create(tenantId, {
-      sale_id: saleId,
+      sale_id: saleIds[0],
+      sale_ids: saleIds,
       order_number: resolvedOrderNumber,
       customer_id: customerId,
       customer_name: customerName,
@@ -350,9 +390,11 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       payments.push(payment);
     }
 
-    await productDynamoRepository.decrementQuantity(tenantId, itemId, quantity);
+    for (const line of resolvedLines) {
+      await productDynamoRepository.decrementQuantity(tenantId, line.itemId, line.quantity);
+    }
 
-    return { sale, plan, payments };
+    return { sale: sales[0], sales, plan, payments };
   }
 
   _isReturnSale(sale) {
@@ -385,7 +427,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
 
     const downPaymentIncome = plans.reduce((sum, plan) => {
       if (!dateFilter(plan.created_at || plan.createdAt)) return sum;
-      if (!isAdmin && !tellerSaleIds.has(String(plan.sale_id))) return sum;
+      if (!isAdmin && !this._planMatchesTeller(plan, tellerSaleIds)) return sum;
       return sum + (Number(plan.down_payment) || 0);
     }, 0);
 
@@ -394,7 +436,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       if (payment.status !== 'paid' || !dateFilter(payment.paid_date)) return sum;
       if (!isAdmin) {
         const plan = planById.get(String(payment.installment_plan_id));
-        if (!plan || !tellerSaleIds.has(String(plan.sale_id))) return sum;
+        if (!plan || !this._planMatchesTeller(plan, tellerSaleIds)) return sum;
       }
       return sum + (Number(payment.amount_paid) || 0);
     }, 0);
