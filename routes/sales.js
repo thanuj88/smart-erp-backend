@@ -4,9 +4,12 @@ const { body } = require('express-validator');
 const saleController = require('../controllers/saleController');
 const { authenticate, requireAdmin, requireTeller, requireReportsAccess } = require('../middleware/auth');
 const validate = require('../middleware/validate');
+const redactCost = require('../middleware/redactCost');
 
 // All routes require authentication
 router.use(authenticate);
+// Cost and profit never leave the API for callers who may not see them (e.g. tellers).
+router.use(redactCost);
 
 // Process a cash sale (Teller and Admin)
 router.post('/cash', [
@@ -52,8 +55,8 @@ router.post(
   saleController.processReturn
 );
 
-// Get top selling products
-router.get('/top', requireTeller, saleController.getTopProducts);
+// Get top selling products (store-wide, so reports access)
+router.get('/top', requireReportsAccess, saleController.getTopProducts);
 
 // Get today's sales
 router.get('/today', requireTeller, saleController.getTodaySales);
@@ -61,11 +64,11 @@ router.get('/today', requireTeller, saleController.getTodaySales);
 // Get recent sales (default last 7 days)
 router.get('/recent', requireTeller, saleController.getRecentSales);
 
-// Generic timeframe summary
-router.get('/summary', requireTeller, saleController.getSummaryByRange);
+// Generic timeframe summary (store-wide totals, so reports access)
+router.get('/summary', requireReportsAccess, saleController.getSummaryByRange);
 
-// Trend data for sales / purchase chart
-router.get('/summary/trend', requireTeller, saleController.getSalesTrend);
+// Trend data for sales / purchase chart (store-wide, so reports access)
+router.get('/summary/trend', requireReportsAccess, saleController.getSalesTrend);
 
 // Get daily summary
 router.get('/summary/daily', requireReportsAccess, saleController.getDailySummary);
@@ -76,7 +79,7 @@ router.get('/summary/weekly', requireReportsAccess, saleController.getWeeklySumm
 // Get monthly summary
 router.get('/summary/monthly', requireReportsAccess, saleController.getMonthlySummary);
 
-// Sales report routes (admin, teller, or reports:view)
+// Sales report routes (admin or reports:view; not tellers)
 router.get('/', requireReportsAccess, saleController.getAllSales);
 
 router.get('/date-range', requireReportsAccess, saleController.getSalesByDateRange);

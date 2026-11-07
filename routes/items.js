@@ -4,9 +4,12 @@ const { body } = require('express-validator');
 const itemController = require('../controllers/itemController');
 const { authenticate, requireAdmin, requireTeller } = require('../middleware/auth');
 const validate = require('../middleware/validate');
+const redactCost = require('../middleware/redactCost');
 
 // All routes require authentication
 router.use(authenticate);
+// Buying price is only for people who manage stock or read reports; tellers get selling data only.
+router.use(redactCost);
 
 // Get all items
 router.get('/', itemController.getAllItems);

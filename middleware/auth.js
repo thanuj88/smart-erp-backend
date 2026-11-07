@@ -52,8 +52,10 @@ function canViewReports(user) {
   ]);
 }
 
+// Store-wide reports and sale history. `sales:create` alone (tellers) is deliberately not enough:
+// those responses carry store totals and margin that tellers must not see.
 const requireReportsAccess = (req, res, next) => {
-  if (isAdminUser(req.user) || canSellUser(req.user) || canViewReports(req.user)) {
+  if (isAdminUser(req.user) || canViewReports(req.user)) {
     return next();
   }
   return res.status(403).json({ error: 'Access denied. Reports permission required.' });
