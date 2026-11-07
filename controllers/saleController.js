@@ -5,6 +5,7 @@ const customerService = require('../services/customerService');
 const { resolveTenantId } = require('../utils/tenant');
 const { validateDistinctCustomerAndWitness, validateNicNumbers, normalizeNic } = require('../utils/installmentValidation');
 const { parseInstallmentLines } = require('../utils/installmentLines');
+const { parseCashSaleBody } = require('../utils/cashSaleLines');
 
 const saveImage = (base64Data, folder, filename) => {
   if (!base64Data) return null;
@@ -29,23 +30,21 @@ const handleSaleError = (res, error) => {
 
 const processCashSale = async (req, res) => {
   try {
-    const { itemId, quantity, orderNumber, customerPhone } = req.body;
-    if (!itemId || !quantity || quantity <= 0) {
-      return res.status(400).json({ error: 'Valid itemId and quantity are required' });
-    }
+    const { orderNumber, customerPhone } = req.body;
+    const { lines, idempotencyKey } = parseCashSaleBody(req.body);
     const tenantId = resolveTenantId(req);
     const member = customerPhone
       ? await customerService.lookupByPhone(tenantId, customerPhone)
       : null;
     const sale = await orderService.processCashSale(tenantId, req.user, {
-      itemId,
-      quantity,
+      lines,
       orderNumber,
+      idempotencyKey,
       customerId: member?.id || null,
       customerName: member?.name || null,
       customerPhone: member?.phone || null,
     });
-    res.status(201).json(sale);
+    res.status(sale.replayed ? 200 : 201).json(sale);
   } catch (error) {
     return handleSaleError(res, error);
   }

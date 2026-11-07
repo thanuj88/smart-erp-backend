@@ -1,4 +1,4 @@
-const { TransactWriteCommand } = require('@aws-sdk/lib-dynamodb');
+const { TransactWriteCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
 const BaseDynamoRepository = require('./baseDynamoRepository');
 const ENTITY = require('../entityTypes');
 const databaseConfig = require('../../config/dataStore');
@@ -174,73 +174,179 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     });
   }
 
-  async processCashSale(tenantId, user, { itemId, quantity, orderNumber, customerId = null, customerName = null, customerPhone = null }) {
-    const item = await productDynamoRepository.getById(tenantId, itemId);
-    if (!item) throw Object.assign(new Error('Item not found'), { status: 404 });
-    if ((item.quantity ?? 0) < quantity) {
-      throw Object.assign(new Error('Insufficient stock'), { status: 400, available: item.quantity });
-    }
+  _idempotencyKeys(tenantId, idempotencyKey) {
+    return {
+      PK: this.pk(tenantId),
+      SK: `${ENTITY.IDEMPOTENCY}#cash#${idempotencyKey}`,
+    };
+  }
 
-    const saleId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
-    const total = item.selling_price * quantity;
-    const profit = (item.selling_price - item.buying_price) * quantity;
-    const saleDate = new Date().toISOString();
-    const resolvedOrderNumber = resolveOrderNumber(orderNumber, saleId);
-    const saleItem = this.toRecord(tenantId, saleId, {
-      item_id: String(itemId),
-      item_name: item.name,
-      quantity,
-      buying_price: item.buying_price,
-      selling_price: item.selling_price,
-      price: item.price,
-      total,
-      profit,
-      payment_type: 'cash',
-      returned_qty: 0,
-      ...this._categoryFromProduct(item),
-      order_number: resolvedOrderNumber,
-      teller_id: user.id,
-      teller_name: user.username,
-      sale_date: saleDate,
-      tenant_id: tenantId,
-      ...(customerId
-        ? {
-            customer_id: String(customerId),
-            customer_name: customerName || null,
-            customer_phone: customerPhone || null,
-          }
-        : {}),
-    });
-
-    await this.client.send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Put: {
-              TableName: databaseConfig.dynamodb.tableName,
-              Item: saleItem,
-            },
-          },
-          {
-            Update: {
-              TableName: databaseConfig.dynamodb.tableName,
-              Key: {
-                PK: productDynamoRepository.pk(tenantId),
-                SK: productDynamoRepository.sk(itemId),
-              },
-              UpdateExpression: 'SET quantity = quantity - :qty, updatedAt = :now',
-              ConditionExpression: 'quantity >= :qty',
-              ExpressionAttributeValues: {
-                ':qty': quantity,
-                ':now': saleDate,
-              },
-            },
-          },
-        ],
+  async _replayCashSale(tenantId, idempotencyKey) {
+    const marker = await this.client.send(
+      new GetCommand({
+        TableName: this.tableName,
+        Key: this._idempotencyKeys(tenantId, idempotencyKey),
       })
     );
+    if (!marker.Item) return null;
 
-    return this.fromRecord(saleItem);
+    const sales = [];
+    for (const saleId of marker.Item.sale_ids || []) {
+      const sale = await this.getById(tenantId, saleId);
+      if (sale) sales.push(sale);
+    }
+    return {
+      order_number: marker.Item.order_number,
+      sale: sales[0] || null,
+      sales,
+      total: sales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0),
+      replayed: true,
+    };
+  }
+
+  /**
+   * One cash bill = one DynamoDB transaction: every sale row, every stock deduction,
+   * and an idempotency marker. Either the whole bill is booked or nothing is.
+   * Retrying with the same idempotencyKey returns the original sale instead of selling again.
+   */
+  async processCashSale(
+    tenantId,
+    user,
+    { lines, orderNumber, idempotencyKey, customerId = null, customerName = null, customerPhone = null }
+  ) {
+    if (!Array.isArray(lines) || !lines.length) {
+      throw Object.assign(new Error('At least one bill line is required'), { status: 400 });
+    }
+    if (!idempotencyKey) {
+      throw Object.assign(new Error('idempotencyKey is required'), { status: 400 });
+    }
+
+    const already = await this._replayCashSale(tenantId, idempotencyKey);
+    if (already) return already;
+
+    const resolvedLines = [];
+    for (const line of lines) {
+      const item = await productDynamoRepository.getById(tenantId, line.itemId);
+      if (!item) {
+        throw Object.assign(new Error(`Item not found: ${line.itemId}`), { status: 404 });
+      }
+      if ((item.quantity ?? 0) < line.quantity) {
+        throw Object.assign(new Error(`Insufficient stock for ${item.name}`), {
+          status: 400,
+          available: item.quantity,
+        });
+      }
+      resolvedLines.push({ itemId: line.itemId, quantity: line.quantity, item });
+    }
+
+    const saleDate = new Date().toISOString();
+    const firstSaleId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const resolvedOrderNumber = resolveOrderNumber(orderNumber, firstSaleId);
+    const tableName = databaseConfig.dynamodb.tableName;
+
+    const saleRecords = resolvedLines.map((line, index) => {
+      const saleId = index === 0 ? firstSaleId : `${Date.now()}${index}${Math.floor(Math.random() * 10000)}`;
+      const { item, quantity, itemId } = line;
+      return this.toRecord(tenantId, saleId, {
+        item_id: String(itemId),
+        item_name: item.name,
+        quantity,
+        buying_price: item.buying_price,
+        selling_price: item.selling_price,
+        price: item.price,
+        total: item.selling_price * quantity,
+        profit: (item.selling_price - item.buying_price) * quantity,
+        payment_type: 'cash',
+        returned_qty: 0,
+        ...this._categoryFromProduct(item),
+        order_number: resolvedOrderNumber,
+        teller_id: user.id,
+        teller_name: user.username,
+        sale_date: saleDate,
+        tenant_id: tenantId,
+        ...(customerId
+          ? {
+              customer_id: String(customerId),
+              customer_name: customerName || null,
+              customer_phone: customerPhone || null,
+            }
+          : {}),
+      });
+    });
+
+    const marker = {
+      ...this._idempotencyKeys(tenantId, idempotencyKey),
+      entityType: ENTITY.IDEMPOTENCY,
+      tenantId,
+      order_number: resolvedOrderNumber,
+      sale_ids: saleRecords.map((record) => record.entityId),
+      createdAt: saleDate,
+    };
+
+    const transactItems = [
+      {
+        Put: {
+          TableName: tableName,
+          Item: marker,
+          ConditionExpression: 'attribute_not_exists(PK)',
+        },
+      },
+    ];
+    resolvedLines.forEach((line, index) => {
+      transactItems.push({
+        Put: {
+          TableName: tableName,
+          Item: saleRecords[index],
+          ConditionExpression: 'attribute_not_exists(PK)',
+        },
+      });
+      transactItems.push({
+        Update: {
+          TableName: tableName,
+          Key: {
+            PK: productDynamoRepository.pk(tenantId),
+            SK: productDynamoRepository.sk(line.itemId),
+          },
+          UpdateExpression: 'SET quantity = quantity - :qty, updatedAt = :now',
+          ConditionExpression: 'quantity >= :qty',
+          ExpressionAttributeValues: { ':qty': line.quantity, ':now': saleDate },
+        },
+      });
+    });
+
+    try {
+      await this.client.send(new TransactWriteCommand({ TransactItems: transactItems }));
+    } catch (error) {
+      if (error.name !== 'TransactionCanceledException') throw error;
+      const reasons = error.CancellationReasons || [];
+
+      // Same key committed between our check and our write (double click / lost response retry).
+      if (reasons[0]?.Code === 'ConditionalCheckFailed') {
+        const replay = await this._replayCashSale(tenantId, idempotencyKey);
+        if (replay) return replay;
+      }
+
+      // Stock changed since the pre-check: name the product that ran out. Nothing was written.
+      for (let index = 0; index < resolvedLines.length; index += 1) {
+        if (reasons[2 + index * 2]?.Code === 'ConditionalCheckFailed') {
+          const fresh = await productDynamoRepository.getById(tenantId, resolvedLines[index].itemId);
+          throw Object.assign(
+            new Error(`Insufficient stock for ${resolvedLines[index].item.name}`),
+            { status: 400, available: fresh?.quantity ?? 0 }
+          );
+        }
+      }
+      throw error;
+    }
+
+    const sales = saleRecords.map((record) => this.fromRecord(record));
+    return {
+      order_number: resolvedOrderNumber,
+      sale: sales[0],
+      sales,
+      total: sales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0),
+      replayed: false,
+    };
   }
 
   _planMatchesTeller(plan, tellerSaleIds) {

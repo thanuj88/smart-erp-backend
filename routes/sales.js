@@ -11,8 +11,12 @@ router.use(authenticate);
 // Process a cash sale (Teller and Admin)
 router.post('/cash', [
   requireTeller,
-  body('itemId').isInt(),
-  body('quantity').isInt({ min: 1 }),
+  body('itemId').not().exists().withMessage('Use lines instead of itemId'),
+  body('quantity').not().exists().withMessage('Use lines instead of quantity'),
+  body('lines').isArray({ min: 1 }),
+  body('lines.*.itemId').exists({ checkFalsy: true }),
+  body('lines.*.quantity').isInt({ min: 1 }),
+  body('idempotencyKey').isString(),
   body('orderNumber').optional().isString(),
   body('customerPhone').optional({ nullable: true }).isString(),
 ], validate, saleController.processCashSale);
