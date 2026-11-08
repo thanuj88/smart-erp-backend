@@ -1,4 +1,4 @@
-const { getCustomerRepository } = require('../repositories/factory');
+const { getCustomerRepository, getOrderRepository } = require('../repositories/factory');
 const installmentPlanService = require('./installmentPlanService');
 const installmentPaymentService = require('./installmentPaymentService');
 const tenantSettingsService = require('./tenantSettingsService');
@@ -123,7 +123,38 @@ class CustomerService {
         throw httpError('A customer with this ID card already exists', 409);
       }
     }
-    return this.repo.create(tenantId, { ...data, phone });
+    const created = await this.repo.create(tenantId, { ...data, phone });
+    await this.attachWalkInPlans(tenantId, created, countryCode);
+    return created;
+  }
+
+  /**
+   * Installments sold to a phone number before it was a CRM member have customer_id null.
+   * When a member with that number exists, link those plans (and their sale rows) to it so the
+   * customer page shows them. Safe to repeat: only unlinked plans are touched.
+   */
+  async attachWalkInPlans(tenantId, customer, countryCode) {
+    try {
+      const key = customer && memberPhoneKey(customer.phone, countryCode);
+      if (!key) return 0;
+      const plans = await installmentPlanService.getAll(tenantId);
+      const matches = plans.filter(
+        (plan) => !plan.customer_id && memberPhoneKey(plan.customer_phone, countryCode) === key
+      );
+      const orders = getOrderRepository();
+      for (const plan of matches) {
+        await installmentPlanService.attachCustomer(tenantId, plan.id, customer.id);
+        const saleIds = plan.sale_ids?.length ? plan.sale_ids : [plan.sale_id].filter(Boolean);
+        for (const saleId of saleIds) {
+          await orders.update(tenantId, saleId, { customer_id: customer.id });
+        }
+      }
+      return matches.length;
+    } catch (error) {
+      // The customer is already saved. A failed link is repaired the next time the phone is saved.
+      console.error('Linking walk-in installment plans failed:', error.message);
+      return 0;
+    }
   }
 
   async update(tenantId, id, data) {
@@ -150,7 +181,11 @@ class CustomerService {
         throw httpError('A customer with this ID card already exists', 409);
       }
     }
-    return this.repo.update(tenantId, id, data);
+    const updated = await this.repo.update(tenantId, id, data);
+    if (data.phone !== undefined && updated) {
+      await this.attachWalkInPlans(tenantId, updated, countryCode);
+    }
+    return updated;
   }
 }
 
