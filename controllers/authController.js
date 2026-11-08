@@ -1,18 +1,20 @@
 const bcrypt = require('bcryptjs');
 const { getAuthRepository } = require('../repositories/factory');
 const authConfig = require('../config/auth');
-const { ROLES, normalizeRole } = require('../config/permissions');
+const { ROLES, normalizeRole, userHasAnyPermission, PERMISSIONS } = require('../config/permissions');
 const permissionService = require('../services/permissionService');
 const tenantSettingsService = require('../services/tenantSettingsService');
 const { logAuthEvent } = require('../services/auditService');
 const tokenService = require('../services/tokenService');
 const { verifyCaptcha } = require('../utils/captcha');
 const mailer = require('../services/mailer');
+const { loginChallengeFailure, needsCaptcha } = require('../utils/loginChallenge');
 const { phoneValidationMessage, toE164, getCountry } = require('../utils/phone');
 
 function clientMeta(req) {
   return {
-    ipAddress: req.ip || req.headers['x-forwarded-for'],
+    // req.ip honours X-Forwarded-For only for proxies listed in TRUST_PROXY. Never read the header here.
+    ipAddress: req.ip,
     userAgent: req.headers['user-agent'],
     deviceName: req.body.deviceName || req.headers['x-device-name'],
     deviceInfo: req.body.deviceInfo,
@@ -218,7 +220,7 @@ const resendVerification = async (req, res) => {
 
 const login = async (req, res) => {
   try {
-    const { email, password, tenantId } = req.body;
+    const { email, password, tenantId, captchaToken } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
@@ -232,6 +234,11 @@ const login = async (req, res) => {
     const blockReason = await assertAccountActive(user, user.tenant_id);
     if (blockReason) {
       return res.status(403).json({ error: blockReason });
+    }
+
+    const challenge = await loginChallengeFailure(user, captchaToken);
+    if (challenge) {
+      return res.status(400).json(challenge);
     }
 
     const credentials = await getAuthRepository().findUserWithPassword(user.id, user.tenant_id);
@@ -248,7 +255,10 @@ const login = async (req, res) => {
         eventType: 'LOGIN_FAILED',
         ...clientMeta(req),
       });
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({
+        error: 'Invalid credentials',
+        ...(needsCaptcha((user.failed_login_attempts || 0) + 1) ? { captchaRequired: true } : {}),
+      });
     }
 
     await getAuthRepository().clearFailedLogins(user.id);
@@ -276,7 +286,7 @@ const login = async (req, res) => {
 
 const loginPin = async (req, res) => {
   try {
-    const { email, pin, tenantId, branchId } = req.body;
+    const { email, pin, tenantId, branchId, captchaToken } = req.body;
     if (!email || !pin) {
       return res.status(400).json({ error: 'Email and PIN are required' });
     }
@@ -291,11 +301,19 @@ const loginPin = async (req, res) => {
       return res.status(403).json({ error: blockReason });
     }
 
+    const challenge = await loginChallengeFailure(user, captchaToken);
+    if (challenge) {
+      return res.status(400).json(challenge);
+    }
+
     const credentials = await getAuthRepository().findUserWithPassword(user.id, user.tenant_id);
     const pinOk = await tokenService.comparePin(pin, credentials?.pin_hash);
     if (!pinOk) {
       await getAuthRepository().recordFailedLogin(user.id);
-      return res.status(401).json({ error: 'Invalid PIN' });
+      return res.status(401).json({
+        error: 'Invalid PIN',
+        ...(needsCaptcha((user.failed_login_attempts || 0) + 1) ? { captchaRequired: true } : {}),
+      });
     }
 
     await getAuthRepository().clearFailedLogins(user.id);
@@ -344,6 +362,14 @@ const refresh = async (req, res) => {
     const blockReason = await assertAccountActive(user, user.tenant_id);
     if (blockReason) {
       return res.status(403).json({ error: blockReason });
+    }
+
+    // Belt and braces for a refresh that was in flight while the password changed.
+    if (
+      user.password_changed_at &&
+      new Date(stored.created_at || stored.createdAt) < new Date(user.password_changed_at)
+    ) {
+      return res.status(401).json({ error: 'Refresh token revoked or expired' });
     }
 
     await tokenService.revokeRefreshToken(refreshToken);
@@ -441,6 +467,7 @@ const resetPassword = async (req, res) => {
     }
 
     const hash = await bcrypt.hash(newPassword, authConfig.bcryptRounds);
+    // updatePassword also revokes every refresh token for this user.
     await getAuthRepository().updatePassword(row.user_id, hash);
 
     await logAuthEvent({
@@ -496,7 +523,17 @@ const changePassword = async (req, res) => {
       ...clientMeta(req),
     });
 
-    res.json({ message: 'Password updated successfully' });
+    // Every other session was just signed out. Hand this device a fresh pair so the
+    // person who changed the password is not logged out with the rest.
+    const trial = user.tenant_id ? await getAuthRepository().getTrialForTenant(user.tenant_id) : null;
+    const tokens = await issueTokenPair(user, req, trial?.ends_at);
+
+    res.json({
+      message: 'Password updated successfully',
+      token: tokens.accessToken,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    });
   } catch (error) {
     console.error('Change password error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -523,8 +560,20 @@ const revokeSession = async (req, res) => {
 
 const listBranches = async (req, res) => {
   try {
-    const tenantId = req.query.tenantId;
-    if (!tenantId) {
+    const isPlatform = userHasAnyPermission(req.user?.permissions, [PERMISSIONS.PLATFORM_MANAGE]);
+    const ownTenant = req.user?.tenantId;
+    const requested = req.query.tenantId;
+
+    let tenantId = ownTenant;
+    if (isPlatform) {
+      if (requested == null || requested === '') {
+        return res.status(400).json({ error: 'tenantId is required for branch listing' });
+      }
+      tenantId = requested;
+    } else if (requested != null && requested !== '' && String(requested) !== String(ownTenant)) {
+      return res.status(403).json({ error: 'You can only list branches of your own shop' });
+    }
+    if (tenantId == null || tenantId === '') {
       return res.status(400).json({ error: 'tenantId is required for branch listing' });
     }
     const branches = await getAuthRepository().listBranchesForTenant(tenantId);

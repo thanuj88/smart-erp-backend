@@ -1,10 +1,20 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
+const { applyHttpMiddleware, allowedOrigins } = require('./config/http');
+const { authenticate } = require('./middleware/auth');
 const { port } = require('./config/config');
 const databaseConfig = require('./config/dataStore');
+const { resolveTrustProxy } = require('./config/proxy');
+const { assertSecureConfig } = require('./config/secrets');
+
+// Before anything listens or seeds: a deployment on placeholder secrets must not come up.
+assertSecureConfig();
 
 const app = express();
+
+const trustProxy = resolveTrustProxy(process.env);
+if (trustProxy.warning) console.warn(trustProxy.warning);
+app.set('trust proxy', trustProxy.value);
 
 async function initializeDataStores() {
   const initDynamoTable = require('./scripts/initDynamoTable');
@@ -18,9 +28,11 @@ initializeDataStores().catch((err) => {
   console.error('Database init failed:', err.message);
 });
 
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+applyHttpMiddleware(app, { authenticate });
+
+if (process.env.NODE_ENV === 'production' && allowedOrigins().length === 0) {
+  console.warn('CORS: set APP_URL (or CORS_ORIGINS) or browsers will be unable to call this API.');
+}
 
 app.use((req, res, next) => {
   console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
@@ -85,6 +97,12 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
+  if (err?.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Request body too large' });
+  }
+  if (err?.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'Malformed JSON body' });
+  }
   console.error('Server error:', err);
   res.status(500).json({ error: 'Internal server error' });
 });
@@ -96,12 +114,6 @@ if (process.env.NODE_ENV === 'production' && !require('./services/mailer').isCon
 app.listen(port, () => {
   console.log(`\n🚀 Server running on port ${port}`);
   console.log(`📡 API available at http://localhost:${port}/api`);
-  console.log(`\n📝 Default credentials (after fresh seed — see backend/DYNAMODB.md):`);
-  console.log(`   Super Admin  - superadmin@platform.local / superadmin123`);
-  console.log(`   Tenant Admin - admin@brightmart.local / admin123`);
-  console.log(`   Teller       - teller@brightmart.local / teller123 (PIN: 1234)`);
-  console.log(`   Manager      - manager@brightmart.local / manager123`);
-  console.log(`   Accountant   - accountant@brightmart.local / accountant123\n`);
 });
 
 module.exports = app;

@@ -8,6 +8,7 @@ const {
   loginLimiter,
   registerLimiter,
   passwordResetLimiter,
+  refreshLimiter,
 } = require('../middleware/rateLimit');
 
 router.post(
@@ -52,7 +53,7 @@ router.post(
   authController.loginPin
 );
 
-router.post('/refresh', authController.refresh);
+router.post('/refresh', refreshLimiter, authController.refresh);
 
 router.post('/logout', authenticate, authController.logout);
 
@@ -84,6 +85,7 @@ router.post(
 
 router.get('/sessions', authenticate, authController.listSessions);
 router.delete('/sessions/:id', authenticate, authController.revokeSession);
-router.get('/branches', authController.listBranches);
+// Branch names are not public. Callers see their own shop; platform operators pass ?tenantId=.
+router.get('/branches', authenticate, authController.listBranches);
 
 module.exports = router;

@@ -33,6 +33,10 @@ class ProductService {
     return this.repo.update(tenantId, id, data);
   }
 
+  releaseReturnQuantity(tenantId, id, quantity) {
+    return this.repo.releaseReturnQuantity(tenantId, id, quantity);
+  }
+
   delete(tenantId, id) {
     return this.repo.delete(tenantId, id);
   }

@@ -6,8 +6,9 @@ async function verifyCaptcha(token) {
 
   const secret = process.env.RECAPTCHA_SECRET;
   if (!secret) {
-    console.warn('RECAPTCHA_SECRET not set; rejecting captcha in production');
-    return process.env.NODE_ENV !== 'production';
+    // Fail closed. Only a local dev environment may skip captcha, and that returned above.
+    console.error('RECAPTCHA_SECRET is not set; rejecting captcha checks');
+    return false;
   }
 
   try {
