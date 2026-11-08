@@ -7,6 +7,11 @@ function badRequest(message) {
   return Object.assign(new Error(message), { status: 400 });
 }
 
+// One installment bill is one DynamoDB transaction: a sale put and a stock
+// update per product, one plan, up to 12 payments, and an optional witness.
+// 40 products stays under the 100-action transaction limit (same cap as cash).
+const MAX_INSTALLMENT_LINES = 40;
+
 function rejectLegacyInstallmentPayload(body = {}) {
   if (body.itemId != null || body.quantity != null) {
     throw badRequest(
@@ -43,10 +48,15 @@ function mergeInstallmentLines(lines) {
 
 function parseInstallmentLines(body = {}) {
   rejectLegacyInstallmentPayload(body);
-  return mergeInstallmentLines(body.lines);
+  const lines = mergeInstallmentLines(body.lines);
+  if (lines.length > MAX_INSTALLMENT_LINES) {
+    throw badRequest(`An installment sale can have at most ${MAX_INSTALLMENT_LINES} different products`);
+  }
+  return lines;
 }
 
 module.exports = {
+  MAX_INSTALLMENT_LINES,
   rejectLegacyInstallmentPayload,
   mergeInstallmentLines,
   parseInstallmentLines,
