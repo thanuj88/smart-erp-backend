@@ -77,6 +77,7 @@ router.post(
 
 router.get('/sessions', authenticate, authController.listSessions);
 router.delete('/sessions/:id', authenticate, authController.revokeSession);
-router.get('/branches', authController.listBranches);
+// Branch names are not public. Callers see their own shop; platform operators pass ?tenantId=.
+router.get('/branches', authenticate, authController.listBranches);
 
 module.exports = router;
