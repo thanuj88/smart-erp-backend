@@ -1,34 +1,48 @@
 const tokenService = require('../services/tokenService');
+const permissionService = require('../services/permissionService');
 const { normalizeRole, userHasAnyPermission, PERMISSIONS } = require('../config/permissions');
 
-const authenticate = (req, res, next) => {
+const authenticate = async (req, res, next) => {
   const token = req.headers.authorization?.split(' ')[1];
 
   if (!token) {
     return res.status(401).json({ error: 'No token provided' });
   }
 
+  let decoded;
   try {
-    const decoded = tokenService.verifyAccessToken(token);
-    if (decoded.type && decoded.type !== 'access') {
-      return res.status(401).json({ error: 'Invalid token type' });
-    }
-    req.user = {
-      id: decoded.id || decoded.sub,
-      username: decoded.username,
-      email: decoded.email,
-      role: normalizeRole(decoded.role),
-      tenantId: decoded.tenantId,
-      branchId: decoded.branchId,
-      permissions: decoded.permissions || [],
-      trialEndsAt: decoded.trialEndsAt,
-    };
-    next();
+    decoded = tokenService.verifyAccessToken(token);
   } catch (error) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
-};
+  if (decoded.type && decoded.type !== 'access') {
+    return res.status(401).json({ error: 'Invalid token type' });
+  }
 
+  const role = normalizeRole(decoded.role);
+  let permissions;
+  try {
+    // The role's current permissions, not the copy inside the token. A permission removed from a
+    // role (or a role that no longer exists) takes effect on the next request, not after 15 minutes.
+    // permissionService caches per role for a minute, so this is not a database read per request.
+    permissions = await permissionService.getPermissionsForRole(role);
+  } catch (error) {
+    console.error('Permission lookup failed:', error.message);
+    return res.status(503).json({ error: 'Authorization is temporarily unavailable' });
+  }
+
+  req.user = {
+    id: decoded.id || decoded.sub,
+    username: decoded.username,
+    email: decoded.email,
+    role,
+    tenantId: decoded.tenantId,
+    branchId: decoded.branchId,
+    permissions,
+    trialEndsAt: decoded.trialEndsAt,
+  };
+  next();
+};
 // Tenant admin: store owners and platform operators.
 // inventory:manage is stock work, not admin — clerks must not pass requireAdmin or see profit.
 function isAdminUser(user) {
