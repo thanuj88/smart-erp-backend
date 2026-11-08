@@ -452,6 +452,9 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     const customerIdCard =
       existingCustomer?.id_card_no || String(customer.idCardNo || '').trim() || null;
 
+    // The customer's ID photo is stored privately, the same way as the witness photo.
+    const customerIdImagePath = customer.idImage ? savePrivateWitnessImage(customer.idImage) : null;
+
     let witnessId = null;
     if (includeWitness && witness) {
       let witnessIdImage = null;
@@ -503,6 +506,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       customer_name: customerName,
       customer_phone: customerPhone,
       customer_id_card: customerIdCard,
+      customer_id_image_path: customerIdImagePath,
       witness_id: witnessId,
       total_amount: totalAmount,
       down_payment: downPayment,
