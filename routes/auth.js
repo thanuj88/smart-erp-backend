@@ -26,6 +26,14 @@ router.post(
   authController.register
 );
 
+router.post(
+  '/resend-verification',
+  passwordResetLimiter,
+  [body('email').isEmail().normalizeEmail()],
+  validate,
+  authController.resendVerification
+);
+
 router.get('/verify-email', authController.verifyEmail);
 router.post('/verify-email', authController.verifyEmail);
 

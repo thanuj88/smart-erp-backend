@@ -107,6 +107,10 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+if (process.env.NODE_ENV === 'production' && !require('./services/mailer').isConfigured()) {
+  console.warn('MAIL: SMTP_HOST is not set. Public sign-up is refused and reset emails are not sent.');
+}
+
 app.listen(port, () => {
   console.log(`\n🚀 Server running on port ${port}`);
   console.log(`📡 API available at http://localhost:${port}/api`);

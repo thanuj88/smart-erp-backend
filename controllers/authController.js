@@ -7,6 +7,7 @@ const tenantSettingsService = require('../services/tenantSettingsService');
 const { logAuthEvent } = require('../services/auditService');
 const tokenService = require('../services/tokenService');
 const { verifyCaptcha } = require('../utils/captcha');
+const mailer = require('../services/mailer');
 const { loginChallengeFailure, needsCaptcha } = require('../utils/loginChallenge');
 const { phoneValidationMessage, toE164, getCountry } = require('../utils/phone');
 
@@ -94,6 +95,12 @@ const register = async (req, res) => {
       return res.status(400).json({ error: phoneError });
     }
 
+    // An account that can never be verified is a dead end. Refuse before creating anything.
+    if (!mailer.isConfigured() && !authConfig.exposeDevTokens) {
+      console.error('Register refused: SMTP_HOST is not configured, so verification email cannot be sent.');
+      return res.status(503).json({ error: 'Sign-up is temporarily unavailable. Please try again later.' });
+    }
+
     const captchaOk = await verifyCaptcha(captchaToken);
     if (!captchaOk) {
       return res.status(400).json({ error: 'CAPTCHA verification failed' });
@@ -134,6 +141,18 @@ const register = async (req, res) => {
     if (authConfig.exposeDevTokens) {
       console.log(`[DEV] Email verification link: ${verifyUrl}`);
     }
+    if (mailer.isConfigured()) {
+      try {
+        await mailer.sendVerificationEmail({ to: email, name: fullName, url: verifyUrl });
+      } catch (mailError) {
+        console.error('Verification email failed:', mailError.message);
+        return res.status(502).json({
+          error:
+            'Your account was created but we could not send the verification email. Request a new one from the sign-in page.',
+          code: 'VERIFICATION_EMAIL_FAILED',
+        });
+      }
+    }
 
     res.status(201).json({
       message: 'Registration successful. Please verify your email to activate your account.',
@@ -163,6 +182,38 @@ const verifyEmail = async (req, res) => {
     res.json({ message: 'Email verified successfully. You can now sign in.' });
   } catch (error) {
     console.error('Verify email error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const resendVerification = async (req, res) => {
+  const generic = { message: 'If this account is waiting for verification, a new email has been sent.' };
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ error: 'Email is required' });
+    }
+    const user = await getAuthRepository().findUserByUsernameOrEmail(email);
+    const isOwnerAwaitingVerification =
+      user && user.email && !user.email_verified_at && normalizeRole(user.role) === ROLES.TENANT_ADMIN;
+    if (isOwnerAwaitingVerification) {
+      const rawVerifyToken = tokenService.generateSecureToken();
+      await getAuthRepository().createVerificationToken(user.id, rawVerifyToken, user.tenant_id);
+      const verifyUrl = `${process.env.APP_URL || 'http://localhost:3000'}/verify-email?token=${rawVerifyToken}`;
+      if (authConfig.exposeDevTokens) {
+        console.log(`[DEV] Email verification link: ${verifyUrl}`);
+      }
+      if (mailer.isConfigured()) {
+        try {
+          await mailer.sendVerificationEmail({ to: user.email, name: user.full_name, url: verifyUrl });
+        } catch (mailError) {
+          console.error('Verification email failed:', mailError.message);
+        }
+      }
+    }
+    res.json(generic);
+  } catch (error) {
+    console.error('Resend verification error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -370,6 +421,16 @@ const forgotPassword = async (req, res) => {
       if (authConfig.exposeDevTokens) {
         console.log(`[DEV] Password reset link: ${resetUrl}`);
       }
+      if (mailer.isConfigured()) {
+        try {
+          await mailer.sendPasswordResetEmail({ to: user.email, name: user.full_name, url: resetUrl });
+        } catch (mailError) {
+          // Same response either way, so the endpoint cannot be used to learn which emails exist.
+          console.error('Password reset email failed:', mailError.message);
+        }
+      } else if (!authConfig.exposeDevTokens) {
+        console.error('Password reset requested but SMTP_HOST is not configured; no email was sent.');
+      }
       await logAuthEvent({
         tenantId: user.tenant_id,
         userId: user.id,
@@ -525,6 +586,7 @@ const listBranches = async (req, res) => {
 module.exports = {
   register,
   verifyEmail,
+  resendVerification,
   login,
   loginPin,
   refresh,
