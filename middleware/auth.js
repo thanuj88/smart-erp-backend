@@ -29,9 +29,10 @@ const authenticate = (req, res, next) => {
   }
 };
 
+// Tenant admin: store owners and platform operators.
+// inventory:manage is stock work, not admin — clerks must not pass requireAdmin or see profit.
 function isAdminUser(user) {
   return userHasAnyPermission(user?.permissions, [
-    PERMISSIONS.INVENTORY_MANAGE,
     PERMISSIONS.SETTINGS_MANAGE,
     PERMISSIONS.USERS_MANAGE,
     PERMISSIONS.PLATFORM_MANAGE,
@@ -68,6 +69,17 @@ const requireAdmin = (req, res, next) => {
   next();
 };
 
+/** Catalog writes. Inventory clerks pass here; they do not pass requireAdmin. */
+const requireInventoryManage = (req, res, next) => {
+  if (
+    isAdminUser(req.user) ||
+    userHasAnyPermission(req.user?.permissions, [PERMISSIONS.INVENTORY_MANAGE])
+  ) {
+    return next();
+  }
+  return res.status(403).json({ error: 'Access denied. Inventory permission required.' });
+};
+
 const requireTeller = (req, res, next) => {
   if (!canSellUser(req.user)) {
     return res.status(403).json({ error: 'Access denied. Sales permission required.' });
@@ -85,6 +97,7 @@ const requireTenantAdmin = (req, res, next) => {
 module.exports = {
   authenticate,
   requireAdmin,
+  requireInventoryManage,
   requireTeller,
   requireTenantAdmin,
   requireReportsAccess,

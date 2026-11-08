@@ -1,5 +1,10 @@
 const { getOrderRepository } = require('../repositories/factory');
-const { isAdminUser } = require('../middleware/auth');
+const { isAdminUser, canViewReports } = require('../middleware/auth');
+
+/** Store-wide sale lists. Reports viewers are not tenant admins, but these endpoints are store reports. */
+function seesStoreSales(user) {
+  return isAdminUser(user) || canViewReports(user);
+}
 
 class OrderService {
   constructor(repo = getOrderRepository()) {
@@ -11,11 +16,11 @@ class OrderService {
   }
 
   getToday(tenantId, user) {
-    return this.repo.getToday(tenantId, user.id, isAdminUser(user));
+    return this.repo.getToday(tenantId, user.id, seesStoreSales(user));
   }
 
   getRecent(tenantId, user, days = 7) {
-    return this.repo.getRecent(tenantId, user.id, isAdminUser(user), days);
+    return this.repo.getRecent(tenantId, user.id, seesStoreSales(user), days);
   }
 
   getByDateRange(tenantId, startDate, endDate) {
@@ -35,15 +40,15 @@ class OrderService {
   }
 
   getDailySummary(tenantId, user) {
-    return this.repo.getDailySummary(tenantId, user.id, isAdminUser(user));
+    return this.repo.getDailySummary(tenantId, user.id, seesStoreSales(user));
   }
 
   getWeeklySummary(tenantId, user) {
-    return this.repo.getWeeklySummary(tenantId, user.id, isAdminUser(user));
+    return this.repo.getWeeklySummary(tenantId, user.id, seesStoreSales(user));
   }
 
   getMonthlySummary(tenantId, user) {
-    return this.repo.getMonthlySummary(tenantId, user.id, isAdminUser(user));
+    return this.repo.getMonthlySummary(tenantId, user.id, seesStoreSales(user));
   }
 
   getOverallSummary(tenantId) {

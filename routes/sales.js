@@ -58,11 +58,9 @@ router.post(
 // Get top selling products (store-wide, so reports access)
 router.get('/top', requireReportsAccess, saleController.getTopProducts);
 
-// Get today's sales
-router.get('/today', requireTeller, saleController.getTodaySales);
-
-// Get recent sales (default last 7 days)
-router.get('/recent', requireTeller, saleController.getRecentSales);
+// Today's / recent sale lists are store-wide reports, not POS lookup
+router.get('/today', requireReportsAccess, saleController.getTodaySales);
+router.get('/recent', requireReportsAccess, saleController.getRecentSales);
 
 // Generic timeframe summary (store-wide totals, so reports access)
 router.get('/summary', requireReportsAccess, saleController.getSummaryByRange);

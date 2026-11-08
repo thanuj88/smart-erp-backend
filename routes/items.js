@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { body } = require('express-validator');
 const itemController = require('../controllers/itemController');
-const { authenticate, requireAdmin, requireTeller } = require('../middleware/auth');
+const { authenticate, requireInventoryManage } = require('../middleware/auth');
 const validate = require('../middleware/validate');
 const redactCost = require('../middleware/redactCost');
 
@@ -26,9 +26,9 @@ router.get('/category/:categoryId', itemController.getItemsByCategory);
 // Get item by ID
 router.get('/:id', itemController.getItemById);
 
-// Admin only routes
+// Inventory clerks and tenant admins. requireAdmin is tenant admin only.
 router.post('/', [
-  requireAdmin,
+  requireInventoryManage,
   body('name').notEmpty().trim(),
   body('sellingPrice').isFloat({ min: 0 }),
   body('buyingPrice').optional({ values: 'falsy' }).isFloat({ min: 0 }),
@@ -42,13 +42,13 @@ router.post('/', [
 router.put(
   '/:id',
   [
-    requireAdmin,
+    requireInventoryManage,
     body('returnQuantity').optional({ values: 'falsy' }).isInt({ min: 0 }),
   ],
   validate,
   itemController.updateItem
 );
 
-router.delete('/:id', requireAdmin, itemController.deleteItem);
+router.delete('/:id', requireInventoryManage, itemController.deleteItem);
 
 module.exports = router;
