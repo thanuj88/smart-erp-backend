@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const { getAuthRepository } = require('../repositories/factory');
 const authConfig = require('../config/auth');
-const { ROLES, normalizeRole } = require('../config/permissions');
+const { ROLES, normalizeRole, userHasAnyPermission, PERMISSIONS } = require('../config/permissions');
 const permissionService = require('../services/permissionService');
 const tenantSettingsService = require('../services/tenantSettingsService');
 const { logAuthEvent } = require('../services/auditService');
@@ -462,8 +462,20 @@ const revokeSession = async (req, res) => {
 
 const listBranches = async (req, res) => {
   try {
-    const tenantId = req.query.tenantId;
-    if (!tenantId) {
+    const isPlatform = userHasAnyPermission(req.user?.permissions, [PERMISSIONS.PLATFORM_MANAGE]);
+    const ownTenant = req.user?.tenantId;
+    const requested = req.query.tenantId;
+
+    let tenantId = ownTenant;
+    if (isPlatform) {
+      if (requested == null || requested === '') {
+        return res.status(400).json({ error: 'tenantId is required for branch listing' });
+      }
+      tenantId = requested;
+    } else if (requested != null && requested !== '' && String(requested) !== String(ownTenant)) {
+      return res.status(403).json({ error: 'You can only list branches of your own shop' });
+    }
+    if (tenantId == null || tenantId === '') {
       return res.status(400).json({ error: 'tenantId is required for branch listing' });
     }
     const branches = await getAuthRepository().listBranchesForTenant(tenantId);
