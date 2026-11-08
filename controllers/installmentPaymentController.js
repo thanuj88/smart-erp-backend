@@ -62,6 +62,8 @@ const recordPayment = async (req, res) => {
     );
     res.json(updated);
   } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    console.error('Record payment error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
