@@ -16,6 +16,16 @@ const { savePrivateWitnessImage } = require('../../utils/privateUpload');
 const { priceBill, bookedUnitPrice, saleChargeFields, readChargeInput, roundMoney } = require('../../utils/salePricing');
 
 const RETURN_TYPES = ['cash', 'defect', 'warranty'];
+// DynamoDB deletes the marker after this. While the item still exists, a repeat key replays the sale.
+const IDEMPOTENCY_TTL_SECONDS = 7 * 24 * 60 * 60;
+
+function idempotencyExpiresAt(isoDate) {
+  const createdMs = Date.parse(isoDate);
+  const createdSeconds = Number.isFinite(createdMs)
+    ? Math.floor(createdMs / 1000)
+    : Math.floor(Date.now() / 1000);
+  return createdSeconds + IDEMPOTENCY_TTL_SECONDS;
+}
 
 class OrderDynamoRepository extends BaseDynamoRepository {
   constructor() {
@@ -299,6 +309,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       order_number: resolvedOrderNumber,
       sale_ids: saleRecords.map((record) => record.entityId),
       createdAt: saleDate,
+      ttl: idempotencyExpiresAt(saleDate),
     };
 
     const transactItems = [
