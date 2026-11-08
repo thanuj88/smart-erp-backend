@@ -7,6 +7,7 @@ const tenantSettingsService = require('../services/tenantSettingsService');
 const { logAuthEvent } = require('../services/auditService');
 const tokenService = require('../services/tokenService');
 const { verifyCaptcha } = require('../utils/captcha');
+const { loginChallengeFailure, needsCaptcha } = require('../utils/loginChallenge');
 const { phoneValidationMessage, toE164, getCountry } = require('../utils/phone');
 
 function clientMeta(req) {
@@ -167,7 +168,7 @@ const verifyEmail = async (req, res) => {
 
 const login = async (req, res) => {
   try {
-    const { email, password, tenantId } = req.body;
+    const { email, password, tenantId, captchaToken } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'Email and password are required' });
@@ -181,6 +182,11 @@ const login = async (req, res) => {
     const blockReason = await assertAccountActive(user, user.tenant_id);
     if (blockReason) {
       return res.status(403).json({ error: blockReason });
+    }
+
+    const challenge = await loginChallengeFailure(user, captchaToken);
+    if (challenge) {
+      return res.status(400).json(challenge);
     }
 
     const credentials = await getAuthRepository().findUserWithPassword(user.id, user.tenant_id);
@@ -197,7 +203,10 @@ const login = async (req, res) => {
         eventType: 'LOGIN_FAILED',
         ...clientMeta(req),
       });
-      return res.status(401).json({ error: 'Invalid credentials' });
+      return res.status(401).json({
+        error: 'Invalid credentials',
+        ...(needsCaptcha((user.failed_login_attempts || 0) + 1) ? { captchaRequired: true } : {}),
+      });
     }
 
     await getAuthRepository().clearFailedLogins(user.id);
@@ -225,7 +234,7 @@ const login = async (req, res) => {
 
 const loginPin = async (req, res) => {
   try {
-    const { email, pin, tenantId, branchId } = req.body;
+    const { email, pin, tenantId, branchId, captchaToken } = req.body;
     if (!email || !pin) {
       return res.status(400).json({ error: 'Email and PIN are required' });
     }
@@ -240,11 +249,19 @@ const loginPin = async (req, res) => {
       return res.status(403).json({ error: blockReason });
     }
 
+    const challenge = await loginChallengeFailure(user, captchaToken);
+    if (challenge) {
+      return res.status(400).json(challenge);
+    }
+
     const credentials = await getAuthRepository().findUserWithPassword(user.id, user.tenant_id);
     const pinOk = await tokenService.comparePin(pin, credentials?.pin_hash);
     if (!pinOk) {
       await getAuthRepository().recordFailedLogin(user.id);
-      return res.status(401).json({ error: 'Invalid PIN' });
+      return res.status(401).json({
+        error: 'Invalid PIN',
+        ...(needsCaptcha((user.failed_login_attempts || 0) + 1) ? { captchaRequired: true } : {}),
+      });
     }
 
     await getAuthRepository().clearFailedLogins(user.id);
