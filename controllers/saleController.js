@@ -43,6 +43,10 @@ const processCashSale = async (req, res) => {
       customerId: member?.id || null,
       customerName: member?.name || null,
       customerPhone: member?.phone || null,
+      shipping: req.body.shipping,
+      shippingPercent: req.body.shippingPercent,
+      discount: req.body.discount,
+      discountPercent: req.body.discountPercent,
     });
     res.status(sale.replayed ? 200 : 201).json(sale);
   } catch (error) {
@@ -93,6 +97,10 @@ const processInstallmentSale = async (req, res) => {
         downPayment,
         installmentMonths,
         orderNumber,
+        shipping: req.body.shipping,
+        shippingPercent: req.body.shippingPercent,
+        discount: req.body.discount,
+        discountPercent: req.body.discountPercent,
       },
       saveImage
     );
