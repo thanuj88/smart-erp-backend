@@ -37,7 +37,12 @@ function signRefreshToken(user) {
 }
 
 function verifyAccessToken(token) {
-  return jwt.verify(token, jwtSecret);
+  const decoded = jwt.verify(token, jwtSecret);
+  // Strict: a token without a type, or with any other type, is not an access token.
+  if (decoded.type !== 'access') {
+    throw new jwt.JsonWebTokenError('Invalid token type');
+  }
+  return decoded;
 }
 
 function verifyRefreshToken(token) {
