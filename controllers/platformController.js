@@ -2,6 +2,7 @@ const { getPlatformRepository, getAuthRepository } = require('../repositories/fa
 const staffUserService = require('../services/staffUserService');
 const tokenService = require('../services/tokenService');
 const { ROLES } = require('../config/permissions');
+const { withoutCredentialFields } = require('../utils/publicUser');
 
 const listTenants = async (req, res) => {
   try {
@@ -121,7 +122,7 @@ const updatePlan = async (req, res) => {
 
 const listUsers = async (req, res) => {
   try {
-    res.json(await getPlatformRepository().listPlatformUsers());
+    res.json(withoutCredentialFields(await getPlatformRepository().listPlatformUsers()));
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -164,7 +165,7 @@ const createUser = async (req, res) => {
       branchId,
       pinHash,
     });
-    res.status(201).json(user);
+    res.status(201).json(withoutCredentialFields(user));
   } catch (error) {
     res.status(400).json({ error: error.message || 'Server error' });
   }
@@ -186,7 +187,7 @@ const updateUser = async (req, res) => {
     }
 
     const user = await getPlatformRepository().updatePlatformUser(req.params.id, req.body);
-    res.json(user);
+    res.json(withoutCredentialFields(user));
   } catch (error) {
     res.status(400).json({ error: error.message || 'Server error' });
   }

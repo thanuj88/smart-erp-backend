@@ -9,6 +9,7 @@ const {
   buildTenantPrefix,
 } = require('../utils/staffUsername');
 const staffUserService = require('../services/staffUserService');
+const { withoutCredentialFields } = require('../utils/publicUser');
 
 const STAFF_ROLES = [
   ROLES.MANAGER,
@@ -24,7 +25,7 @@ const getAllUsers = async (req, res) => {
     const users = tenantId
       ? await repo.getStaffUsers(tenantId)
       : await repo.getStaffUsers(req.user.tenantId || 1);
-    res.json(users);
+    res.json(withoutCredentialFields(users));
   } catch (error) {
     console.error('Get users error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -79,7 +80,7 @@ const createUser = async (req, res) => {
       isActive: true,
     });
 
-    res.status(201).json(newUser);
+    res.status(201).json(withoutCredentialFields(newUser));
   } catch (error) {
     console.error('Create user error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -148,7 +149,7 @@ const updateUser = async (req, res) => {
       pinHash,
     });
 
-    res.json(updated);
+    res.json(withoutCredentialFields(updated));
   } catch (error) {
     console.error('Update user error:', error);
     res.status(500).json({ error: 'Server error' });

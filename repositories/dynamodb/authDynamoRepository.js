@@ -189,6 +189,7 @@ class AuthDynamoRepository {
     return slug;
   }
 
+  // Public user. Password and PIN hashes are attached only by findUserWithPassword.
   _normalizeUser(item) {
     if (!item) return null;
     const id = item.entityId || item.id;
@@ -198,8 +199,6 @@ class AuthDynamoRepository {
       branch_id: item.branch_id ?? item.branchId,
       username: item.username,
       email: item.email,
-      password: item.password ?? item.password_hash ?? item.passwordHash,
-      pin_hash: item.pin_hash ?? item.pinHash,
       full_name: item.full_name ?? item.fullName,
       role: item.role,
       is_active: item.is_active ?? item.isActive,
@@ -209,6 +208,16 @@ class AuthDynamoRepository {
       deleted_at: item.deleted_at ?? item.deletedAt,
       created_at: item.created_at ?? item.createdAt,
       updated_at: item.updated_at ?? item.updatedAt,
+    };
+  }
+
+  _withCredentials(item) {
+    const user = this._normalizeUser(item);
+    if (!user) return null;
+    return {
+      ...user,
+      password: item.password ?? item.password_hash ?? item.passwordHash ?? null,
+      pin_hash: item.pin_hash ?? item.pinHash ?? null,
     };
   }
 
@@ -241,7 +250,8 @@ class AuthDynamoRepository {
       });
       return users[0] ? this._normalizeUser(users[0]) : null;
     }
-    return this.findUserWithPassword(ref.userId, ref.tenantId);
+    const full = await this.users.getById(ref.tenantId, ref.userId);
+    return full && !full.deleted_at ? this._normalizeUser(full) : null;
   }
 
   async findUserById(id, tenantIdHint = null) {
@@ -266,13 +276,13 @@ class AuthDynamoRepository {
   async findUserWithPassword(id, tenantIdHint = null) {
     if (tenantIdHint != null) {
       const full = await this.users.getById(tenantIdHint, id);
-      return full && !full.deleted_at ? this._normalizeUser(full) : null;
+      return full && !full.deleted_at ? this._withCredentials(full) : null;
     }
     const user = await this.findUserById(id);
     if (!user) return null;
     const tenantId = user.tenant_id ?? PLATFORM_TENANT;
     const full = await this.users.getById(tenantId, id);
-    return full ? this._normalizeUser(full) : user;
+    return full ? this._withCredentials(full) : user;
   }
 
   async getTrialForTenant(tenantId) {

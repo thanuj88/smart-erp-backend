@@ -183,11 +183,12 @@ const login = async (req, res) => {
       return res.status(403).json({ error: blockReason });
     }
 
-    if (!user.password) {
+    const credentials = await getAuthRepository().findUserWithPassword(user.id, user.tenant_id);
+    if (!credentials?.password) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const isValid = await bcrypt.compare(password, user.password);
+    const isValid = await bcrypt.compare(password, credentials.password);
     if (!isValid) {
       await getAuthRepository().recordFailedLogin(user.id);
       await logAuthEvent({
@@ -239,7 +240,8 @@ const loginPin = async (req, res) => {
       return res.status(403).json({ error: blockReason });
     }
 
-    const pinOk = await tokenService.comparePin(pin, user.pin_hash);
+    const credentials = await getAuthRepository().findUserWithPassword(user.id, user.tenant_id);
+    const pinOk = await tokenService.comparePin(pin, credentials?.pin_hash);
     if (!pinOk) {
       await getAuthRepository().recordFailedLogin(user.id);
       return res.status(401).json({ error: 'Invalid PIN' });
