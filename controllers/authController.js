@@ -12,7 +12,8 @@ const { phoneValidationMessage, toE164, getCountry } = require('../utils/phone')
 
 function clientMeta(req) {
   return {
-    ipAddress: req.ip || req.headers['x-forwarded-for'],
+    // req.ip honours X-Forwarded-For only for proxies listed in TRUST_PROXY. Never read the header here.
+    ipAddress: req.ip,
     userAgent: req.headers['user-agent'],
     deviceName: req.body.deviceName || req.headers['x-device-name'],
     deviceInfo: req.body.deviceInfo,

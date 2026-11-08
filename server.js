@@ -4,12 +4,17 @@ const { applyHttpMiddleware, allowedOrigins } = require('./config/http');
 const { authenticate } = require('./middleware/auth');
 const { port } = require('./config/config');
 const databaseConfig = require('./config/dataStore');
+const { resolveTrustProxy } = require('./config/proxy');
 const { assertSecureConfig } = require('./config/secrets');
 
 // Before anything listens or seeds: a deployment on placeholder secrets must not come up.
 assertSecureConfig();
 
 const app = express();
+
+const trustProxy = resolveTrustProxy(process.env);
+if (trustProxy.warning) console.warn(trustProxy.warning);
+app.set('trust proxy', trustProxy.value);
 
 async function initializeDataStores() {
   const initDynamoTable = require('./scripts/initDynamoTable');
