@@ -539,12 +539,13 @@ class OrderDynamoRepository extends BaseDynamoRepository {
 
     const planById = new Map(plans.map((p) => [String(p.id), p]));
     const installmentIncome = payments.reduce((sum, payment) => {
-      if (payment.status !== 'paid' || !dateFilter(payment.paid_date)) return sum;
+      const collected = Number(payment.amount_paid) || 0;
+      if (payment.status === 'cancelled' || collected <= 0 || !dateFilter(payment.paid_date)) return sum;
       if (!isAdmin) {
         const plan = planById.get(String(payment.installment_plan_id));
         if (!plan || !this._planMatchesTeller(plan, tellerSaleIds)) return sum;
       }
-      return sum + (Number(payment.amount_paid) || 0);
+      return sum + collected;
     }, 0);
 
     const cashRevenue =
