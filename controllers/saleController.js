@@ -1,21 +1,9 @@
-const path = require('path');
-const fs = require('fs');
 const orderService = require('../services/orderService');
 const customerService = require('../services/customerService');
 const { resolveTenantId } = require('../utils/tenant');
 const { validateDistinctCustomerAndWitness, validateNicNumbers, normalizeNic } = require('../utils/installmentValidation');
 const { parseInstallmentLines } = require('../utils/installmentLines');
 const { parseCashSaleBody } = require('../utils/cashSaleLines');
-
-const saveImage = (base64Data, folder, filename) => {
-  if (!base64Data) return null;
-  const uploadsDir = path.join(__dirname, '../uploads', folder);
-  if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-  const base64Image = base64Data.split(';base64,').pop();
-  const filePath = path.join(uploadsDir, filename);
-  fs.writeFileSync(filePath, base64Image, { encoding: 'base64' });
-  return `/uploads/${folder}/${filename}`;
-};
 
 const handleSaleError = (res, error) => {
   if (error.status) {
@@ -93,8 +81,7 @@ const processInstallmentSale = async (req, res) => {
         downPayment,
         installmentMonths,
         orderNumber,
-      },
-      saveImage
+      }
     );
     res.status(201).json(result);
   } catch (error) {

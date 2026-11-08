@@ -11,6 +11,7 @@ const installmentPaymentDynamoRepository = require('./installmentPaymentDynamoRe
 const installmentSettingDynamoRepository = require('./installmentSettingDynamoRepository');
 const returnDynamoRepository = require('./returnDynamoRepository');
 const { resolveOrderNumber, normalizeOrderNumber } = require('../../utils/orderId');
+const { savePrivateWitnessImage } = require('../../utils/privateUpload');
 
 const RETURN_TYPES = ['cash', 'defect', 'warranty'];
 
@@ -359,7 +360,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     return ids.some((id) => tellerSaleIds.has(id));
   }
 
-  async processInstallmentSale(tenantId, user, payload, saveImage) {
+  async processInstallmentSale(tenantId, user, payload) {
     const { customer, witness, downPayment, installmentMonths, orderNumber } = payload;
     const lines = Array.isArray(payload.lines) ? payload.lines : [];
     if (!lines.length) {
@@ -421,8 +422,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     if (includeWitness && witness) {
       let witnessIdImage = null;
       if (witness.idImage) {
-        const witnessFilename = `witness_${Date.now()}_${witness.idCardNo}.jpg`;
-        witnessIdImage = saveImage(witness.idImage, 'witnesses', witnessFilename);
+        witnessIdImage = savePrivateWitnessImage(witness.idImage);
       }
 
       const createdWitness = await witnessDynamoRepository.create(tenantId, {

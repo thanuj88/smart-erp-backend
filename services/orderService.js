@@ -31,8 +31,8 @@ class OrderService {
     return this.repo.processCashSale(tenantId, user, payload);
   }
 
-  processInstallmentSale(tenantId, user, payload, saveImage) {
-    return this.repo.processInstallmentSale(tenantId, user, payload, saveImage);
+  processInstallmentSale(tenantId, user, payload) {
+    return this.repo.processInstallmentSale(tenantId, user, payload);
   }
 
   getTopProducts(tenantId, range, limit) {
