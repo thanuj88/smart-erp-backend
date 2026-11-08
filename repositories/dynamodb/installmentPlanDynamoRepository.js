@@ -9,9 +9,10 @@ class InstallmentPlanDynamoRepository extends BaseDynamoRepository {
 
   async enrich(tenantId, plan) {
     if (!plan) return null;
+    // Walk-in plans have no member to copy from. Keep them so callers can still match on the phone.
+    if (!plan.customer_id) return plan;
     // Plans made for a CRM member can be missing name or NIC (older plans). Fill from the member.
     if (plan.customer_name && plan.customer_id_card) return plan;
-    if (!plan.customer_id) return plan;
     const customer = await customerDynamoRepository.getById(tenantId, plan.customer_id);
     if (customer) {
       if (!plan.customer_name) {

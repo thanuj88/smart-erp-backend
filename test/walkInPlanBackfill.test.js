@@ -23,6 +23,7 @@ before(async () => {
   customerService = require('../services/customerService');
   await settings.upsert(T, 3, 0);
   await products.create(T, { id: 'p1', name: 'Fan', sellingPrice: 100, buyingPrice: 60, quantity: 100, returnQuantity: 0 });
+  await products.create(T, { id: 'p2', name: 'Lamp', sellingPrice: 100, buyingPrice: 60, quantity: 100, returnQuantity: 0 });
 });
 
 after(async () => {
@@ -37,9 +38,9 @@ const it = (name, fn) =>
     return fn(t);
   });
 
-const sellWalkIn = async (name, phone, lines = 1) => {
+const sellWalkIn = async (name, phone, itemIds = ['p1']) => {
   await orders.processInstallmentSale(T, user, {
-    lines: Array.from({ length: lines }, () => ({ itemId: 'p1', quantity: 1 })),
+    lines: itemIds.map((itemId) => ({ itemId, quantity: 1 })),
     customer: { name, phone },
     includeWitness: false,
     downPayment: 10,
@@ -51,7 +52,8 @@ const sellWalkIn = async (name, phone, lines = 1) => {
 const saleRow = (id) => orders.getById(T, id);
 
 it('registering the phone in CRM links the earlier walk-in plan and its sale rows', async () => {
-  const plan = await sellWalkIn('Walk A', '0772000001', 2);
+  // Two distinct products, so the plan carries two sale rows.
+  const plan = await sellWalkIn('Walk A', '0772000001', ['p1', 'p2']);
   assert.equal(plan.customer_id, null);
   assert.equal(plan.sale_ids.length, 2);
 
