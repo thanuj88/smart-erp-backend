@@ -49,6 +49,14 @@ router.put(
   itemController.updateItem
 );
 
+// Move units from return stock back to sellable stock in one atomic update.
+router.post(
+  '/:id/release-returns',
+  [requireInventoryManage, body('quantity').isInt({ min: 1 })],
+  validate,
+  itemController.releaseReturns
+);
+
 router.delete('/:id', requireInventoryManage, itemController.deleteItem);
 
 module.exports = router;

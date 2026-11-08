@@ -11,21 +11,30 @@ const {
 const staffUserService = require('../services/staffUserService');
 const { withoutCredentialFields } = require('../utils/publicUser');
 const { pinProblem } = require('../utils/pin');
-
-const STAFF_ROLES = [
-  ROLES.MANAGER,
-  ROLES.TELLER,
-  ROLES.INVENTORY,
-  ROLES.ACCOUNTANT,
-];
+const { isStaffRole, STAFF_ROLE_ERROR } = require('../config/staffRoles');
 
 const getAllUsers = async (req, res) => {
   try {
-    const tenantId = req.user.role === ROLES.SUPER_ADMIN ? null : req.user.tenantId;
+    const isMissing = (v) => v === undefined || v === null || v === '';
+    let tenantId;
+    if (req.user.role === ROLES.SUPER_ADMIN) {
+      // The platform account has tenantId 0, which is not a shop. It must name the shop it wants.
+      const requested = req.query.tenantId;
+      if (isMissing(requested) || typeof requested !== 'string' || !/^\d+$/.test(requested) || Number(requested) < 1) {
+        return res.status(400).json({
+          error: 'tenantId query parameter is required. Use /api/platform/users for platform staff.',
+        });
+      }
+      tenantId = Number(requested);
+    } else {
+      // 0 is a valid-looking falsy value, so test for missing explicitly and never fall back to tenant 1.
+      if (isMissing(req.user.tenantId)) {
+        return res.status(403).json({ error: 'No shop is associated with this account' });
+      }
+      tenantId = req.user.tenantId;
+    }
     const repo = getAuthRepository();
-    const users = tenantId
-      ? await repo.getStaffUsers(tenantId)
-      : await repo.getStaffUsers(req.user.tenantId || 1);
+    const users = await repo.getStaffUsers(tenantId);
     res.json(withoutCredentialFields(users));
   } catch (error) {
     console.error('Get users error:', error);
@@ -43,12 +52,10 @@ const createUser = async (req, res) => {
       return res.status(400).json({ error: 'Email, password, and role are required' });
     }
 
-    const normalizedRole = normalizeRole(role);
-    if (!STAFF_ROLES.includes(normalizedRole)) {
-      return res.status(400).json({
-        error: 'Staff role must be MANAGER, TELLER, INVENTORY, or ACCOUNTANT',
-      });
+    if (!isStaffRole(role)) {
+      return res.status(400).json({ error: STAFF_ROLE_ERROR });
     }
+    const normalizedRole = normalizeRole(role);
 
     if (pin) {
       const pinError = pinProblem(pin);
@@ -107,11 +114,12 @@ const updateUser = async (req, res) => {
       return res.status(403).json({ error: 'Cannot modify users outside your organization' });
     }
 
-    if (role) {
-      const normalizedRole = normalizeRole(role);
-      if (normalizedRole === ROLES.SUPER_ADMIN || normalizedRole === ROLES.TENANT_ADMIN) {
-        return res.status(400).json({ error: 'Cannot assign admin roles via this endpoint' });
+    if (role !== undefined && role !== null && role !== '') {
+      // Same allowlist as create. Admin roles and any custom role name are refused.
+      if (!isStaffRole(role)) {
+        return res.status(400).json({ error: STAFF_ROLE_ERROR });
       }
+      const normalizedRole = normalizeRole(role);
       try {
         await staffUserService.assertStaffRoleChange(user.tenant_id, normalizedRole, user.role);
       } catch (quotaErr) {
@@ -154,7 +162,7 @@ const updateUser = async (req, res) => {
 
     const updated = await repo.updateStaffUser(userId, {
       username: finalUsername,
-      role: role ? normalizeRole(role) : undefined,
+      role: role !== undefined && role !== null && role !== '' ? normalizeRole(role) : undefined,
       fullName,
       branchId,
       pinHash,

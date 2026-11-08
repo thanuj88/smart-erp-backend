@@ -45,13 +45,13 @@ const lookupCustomerByPhone = async (req, res) => {
     }
     const customer = await customerService.lookupByPhone(resolveTenantId(req), phone);
     if (!customer) return res.status(404).json({ error: 'Customer not found' });
+    // The till only needs to know who the member is and whether to warn about overdue money.
+    // NIC, address and email stay in the CRM (reports/users permissions): a phone number alone
+    // must not be enough to read a person's identity record.
     res.json({
       id: customer.id,
       name: customer.name || '',
       phone: customer.phone,
-      email: customer.email || '',
-      address: customer.address || '',
-      id_card_no: customer.id_card_no || '',
       overdue: customer.overdue || { count: 0, plans: 0, amount: 0 },
     });
   } catch (error) {

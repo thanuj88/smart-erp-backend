@@ -65,6 +65,10 @@ Also runs automatically when the API starts (missing items only).
 
 ### Default logins (after fresh seed)
 
+Local development only (`NODE_ENV=development` or `test`). Any other `NODE_ENV` does not create the demo shop or these
+accounts, and the server no longer prints these credentials on boot. In a deployed environment the super admin is created
+only if `SUPER_ADMIN_PASSWORD` is set to a unique value of 12+ characters before the first start.
+
 | Role | Email | Password | Notes |
 |------|-------|----------|--------|
 | Super Admin | `superadmin@platform.local` | `superadmin123` | Platform |
