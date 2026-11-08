@@ -22,6 +22,10 @@ router.post('/cash', [
   body('idempotencyKey').isString(),
   body('orderNumber').optional().isString(),
   body('customerPhone').optional({ nullable: true }).isString(),
+  body('shipping').optional({ nullable: true }).isFloat({ min: 0 }),
+  body('shippingPercent').optional({ nullable: true }).isFloat({ min: 0, max: 100 }),
+  body('discount').optional({ nullable: true }).isFloat({ min: 0 }),
+  body('discountPercent').optional({ nullable: true }).isFloat({ min: 0, max: 100 }),
 ], validate, saleController.processCashSale);
 
 // Process an installment sale (Teller and Admin)
@@ -38,6 +42,10 @@ router.post('/installment', [
   body('downPayment').isFloat({ min: 0 }),
   body('installmentMonths').isInt().isIn([3, 6, 12]),
   body('orderNumber').optional().isString(),
+  body('shipping').optional({ nullable: true }).isFloat({ min: 0 }),
+  body('shippingPercent').optional({ nullable: true }).isFloat({ min: 0, max: 100 }),
+  body('discount').optional({ nullable: true }).isFloat({ min: 0 }),
+  body('discountPercent').optional({ nullable: true }).isFloat({ min: 0, max: 100 }),
 ], validate, saleController.processInstallmentSale);
 
 router.get('/orders/:orderNumber', requireTeller, saleController.getOrderByNumber);

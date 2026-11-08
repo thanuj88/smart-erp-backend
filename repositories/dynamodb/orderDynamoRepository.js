@@ -10,8 +10,10 @@ const installmentPlanDynamoRepository = require('./installmentPlanDynamoReposito
 const installmentPaymentDynamoRepository = require('./installmentPaymentDynamoRepository');
 const installmentSettingDynamoRepository = require('./installmentSettingDynamoRepository');
 const returnDynamoRepository = require('./returnDynamoRepository');
+const promotionDynamoRepository = require('./promotionDynamoRepository');
 const { resolveOrderNumber, normalizeOrderNumber } = require('../../utils/orderId');
 const { savePrivateWitnessImage } = require('../../utils/privateUpload');
+const { priceBill, bookedUnitPrice, saleChargeFields, readChargeInput, roundMoney } = require('../../utils/salePricing');
 
 const RETURN_TYPES = ['cash', 'defect', 'warranty'];
 
@@ -196,13 +198,29 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       const sale = await this.getById(tenantId, saleId);
       if (sale) sales.push(sale);
     }
+    const total = sales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0);
+    const first = sales[0] || {};
     return {
       order_number: marker.Item.order_number,
       sale: sales[0] || null,
       sales,
-      total: sales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0),
+      total,
+      charges: {
+        itemsTotal: sales.reduce((sum, sale) => sum + (Number(sale.list_total) || 0), 0) || total,
+        shippingAmount: Number(first.shipping_amount) || 0,
+        discountAmount: Number(first.discount_amount) || 0,
+        grandTotal: total,
+      },
       replayed: true,
     };
+  }
+
+  async _priceLines(tenantId, resolvedLines, chargeInput) {
+    const promotions = await promotionDynamoRepository.getActive(
+      tenantId,
+      promotionDynamoRepository.localToday()
+    );
+    return priceBill(resolvedLines, promotions, chargeInput);
   }
 
   /**
@@ -213,7 +231,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
   async processCashSale(
     tenantId,
     user,
-    { lines, orderNumber, idempotencyKey, customerId = null, customerName = null, customerPhone = null }
+    { lines, orderNumber, idempotencyKey, customerId = null, customerName = null, customerPhone = null, ...chargeInput }
   ) {
     if (!Array.isArray(lines) || !lines.length) {
       throw Object.assign(new Error('At least one bill line is required'), { status: 400 });
@@ -240,12 +258,14 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       resolvedLines.push({ itemId: line.itemId, quantity: line.quantity, item });
     }
 
+    const priced = await this._priceLines(tenantId, resolvedLines, readChargeInput(chargeInput));
+
     const saleDate = new Date().toISOString();
     const firstSaleId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const resolvedOrderNumber = resolveOrderNumber(orderNumber, firstSaleId);
     const tableName = databaseConfig.dynamodb.tableName;
 
-    const saleRecords = resolvedLines.map((line, index) => {
+    const saleRecords = priced.lines.map((line, index) => {
       const saleId = index === 0 ? firstSaleId : `${Date.now()}${index}${Math.floor(Math.random() * 10000)}`;
       const { item, quantity, itemId } = line;
       return this.toRecord(tenantId, saleId, {
@@ -253,10 +273,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
         item_name: item.name,
         quantity,
         buying_price: item.buying_price,
-        selling_price: item.selling_price,
-        price: item.price,
-        total: item.selling_price * quantity,
-        profit: (item.selling_price - item.buying_price) * quantity,
+        ...saleChargeFields(line, priced),
         payment_type: 'cash',
         returned_qty: 0,
         ...this._categoryFromProduct(item),
@@ -293,7 +310,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
         },
       },
     ];
-    resolvedLines.forEach((line, index) => {
+    priced.lines.forEach((line, index) => {
       transactItems.push({
         Put: {
           TableName: tableName,
@@ -328,11 +345,11 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       }
 
       // Stock changed since the pre-check: name the product that ran out. Nothing was written.
-      for (let index = 0; index < resolvedLines.length; index += 1) {
+      for (let index = 0; index < priced.lines.length; index += 1) {
         if (reasons[2 + index * 2]?.Code === 'ConditionalCheckFailed') {
-          const fresh = await productDynamoRepository.getById(tenantId, resolvedLines[index].itemId);
+          const fresh = await productDynamoRepository.getById(tenantId, priced.lines[index].itemId);
           throw Object.assign(
-            new Error(`Insufficient stock for ${resolvedLines[index].item.name}`),
+            new Error(`Insufficient stock for ${priced.lines[index].item.name}`),
             { status: 400, available: fresh?.quantity ?? 0 }
           );
         }
@@ -345,7 +362,13 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       order_number: resolvedOrderNumber,
       sale: sales[0],
       sales,
-      total: sales.reduce((sum, sale) => sum + (Number(sale.total) || 0), 0),
+      total: priced.grandTotal,
+      charges: {
+        itemsTotal: priced.itemsTotal,
+        shippingAmount: priced.shippingAmount,
+        discountAmount: priced.discountAmount,
+        grandTotal: priced.grandTotal,
+      },
       replayed: false,
     };
   }
@@ -387,18 +410,15 @@ class OrderDynamoRepository extends BaseDynamoRepository {
           { status: 400, available: item.quantity }
         );
       }
-      const lineTotal = Number(item.selling_price) * line.quantity;
-      const lineProfit = (Number(item.selling_price) - Number(item.buying_price || 0)) * line.quantity;
       resolvedLines.push({
         itemId: line.itemId,
         quantity: line.quantity,
         item,
-        lineTotal,
-        lineProfit,
       });
     }
 
-    const totalAmount = resolvedLines.reduce((sum, line) => sum + line.lineTotal, 0);
+    const priced = await this._priceLines(tenantId, resolvedLines, readChargeInput(payload));
+    const totalAmount = priced.grandTotal;
     if (downPayment >= totalAmount) {
       throw Object.assign(new Error('Down payment must be less than total amount'), { status: 400 });
     }
@@ -437,18 +457,15 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     const resolvedOrderNumber = resolveOrderNumber(orderNumber, firstSaleId);
     const sales = [];
 
-    for (let i = 0; i < resolvedLines.length; i += 1) {
-      const line = resolvedLines[i];
+    for (let i = 0; i < priced.lines.length; i += 1) {
+      const line = priced.lines[i];
       const saleId = i === 0 ? firstSaleId : `${Date.now()}${i}${Math.floor(Math.random() * 10000)}`;
       const sale = await this.put(tenantId, saleId, {
         item_id: String(line.itemId),
         item_name: line.item.name,
         quantity: line.quantity,
         buying_price: line.item.buying_price,
-        selling_price: line.item.selling_price,
-        price: line.item.price,
-        total: line.lineTotal,
-        profit: line.lineProfit,
+        ...saleChargeFields(line, priced),
         payment_type: 'installment',
         returned_qty: 0,
         ...this._categoryFromProduct(line.item),
@@ -500,7 +517,19 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       await productDynamoRepository.decrementQuantity(tenantId, line.itemId, line.quantity);
     }
 
-    return { sale: sales[0], sales, plan, payments };
+    return {
+      sale: sales[0],
+      sales,
+      plan,
+      payments,
+      total: priced.grandTotal,
+      charges: {
+        itemsTotal: priced.itemsTotal,
+        shippingAmount: priced.shippingAmount,
+        discountAmount: priced.discountAmount,
+        grandTotal: priced.grandTotal,
+      },
+    };
   }
 
   _isReturnSale(sale) {
@@ -539,12 +568,13 @@ class OrderDynamoRepository extends BaseDynamoRepository {
 
     const planById = new Map(plans.map((p) => [String(p.id), p]));
     const installmentIncome = payments.reduce((sum, payment) => {
-      if (payment.status !== 'paid' || !dateFilter(payment.paid_date)) return sum;
+      const collected = Number(payment.amount_paid) || 0;
+      if (payment.status === 'cancelled' || collected <= 0 || !dateFilter(payment.paid_date)) return sum;
       if (!isAdmin) {
         const plan = planById.get(String(payment.installment_plan_id));
         if (!plan || !this._planMatchesTeller(plan, tellerSaleIds)) return sum;
       }
-      return sum + (Number(payment.amount_paid) || 0);
+      return sum + collected;
     }, 0);
 
     const cashRevenue =
@@ -624,12 +654,15 @@ class OrderDynamoRepository extends BaseDynamoRepository {
   _mapSaleLine(sale) {
     const qty = Number(sale.quantity) || 0;
     const returned = Number(sale.returned_qty) || 0;
-    const unit = Number(sale.selling_price ?? sale.price) || 0;
+    const unit = bookedUnitPrice(sale);
+    const soldQty = qty || 0;
+    const unitProfit = soldQty > 0 ? (Number(sale.profit) || 0) / soldQty : 0;
     return {
       ...sale,
       returned_qty: returned,
       returnable_qty: Math.max(0, qty - returned),
       unit_price: unit,
+      unit_profit: unitProfit,
     };
   }
 
@@ -772,13 +805,19 @@ class OrderDynamoRepository extends BaseDynamoRepository {
           status: 400,
         });
       }
+      const fullLine =
+        qty === Number(sale.quantity) &&
+        !(Number(sale.returned_qty) > 0) &&
+        Number.isFinite(Number(sale.total));
+      const lineTotal = fullLine ? roundMoney(Number(sale.total)) : roundMoney(sale.unit_price * qty);
       returnLines.push({
         sale_id: sale.id,
         item_id: sale.item_id,
         item_name: sale.item_name,
         qty,
         unit_price: sale.unit_price,
-        line_total: sale.unit_price * qty,
+        unit_profit: sale.unit_profit,
+        line_total: lineTotal,
         previous_returned: sale.returned_qty,
         buying_price: sale.buying_price,
         selling_price: sale.selling_price ?? sale.price ?? sale.unit_price,
@@ -886,8 +925,9 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       const lineTotal = Number(line.line_total) || 0;
       const cashOut =
         returnType === 'cash' && refundValue > 0 ? (refundCash * lineTotal) / refundValue : 0;
-      const unitProfit =
-        (Number(line.selling_price) || 0) - (Number(line.buying_price) || 0);
+      const unitProfit = Number.isFinite(Number(line.unit_profit))
+        ? Number(line.unit_profit)
+        : (Number(line.selling_price) || 0) - (Number(line.buying_price) || 0);
       let category = {
         category_id: line.category_id || null,
         category_name: line.category_name || '',
