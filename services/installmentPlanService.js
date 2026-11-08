@@ -41,6 +41,10 @@ class InstallmentPlanService {
     );
   }
 
+  attachCustomer(tenantId, planId, customerId) {
+    return this.repo.update(tenantId, planId, { customer_id: customerId });
+  }
+
   updateStatus(tenantId, id, status) {
     return this.repo.updateStatus(tenantId, id, status);
   }

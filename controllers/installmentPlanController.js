@@ -1,10 +1,20 @@
 const installmentPlanService = require('../services/installmentPlanService');
+const fs = require('fs');
 const { resolveTenantId } = require('../utils/tenant');
+const { resolveWitnessImageFile } = require('../utils/privateUpload');
+
+// The stored file path is internal. Callers only learn whether a photo exists.
+const publicPlan = (plan) => {
+  if (!plan) return plan;
+  const { customer_id_image_path: imagePath, ...rest } = plan;
+  return { ...rest, has_customer_id_image: Boolean(imagePath) };
+};
+const publicPlans = (plans) => plans.map(publicPlan);
 
 const getAllPlans = async (req, res) => {
   try {
     const plans = await installmentPlanService.getAll(resolveTenantId(req));
-    res.json(plans);
+    res.json(publicPlans(plans));
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -13,7 +23,7 @@ const getAllPlans = async (req, res) => {
 const getActivePlans = async (req, res) => {
   try {
     const plans = await installmentPlanService.getActive(resolveTenantId(req));
-    res.json(plans);
+    res.json(publicPlans(plans));
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -22,7 +32,7 @@ const getActivePlans = async (req, res) => {
 const getCompletedPlans = async (req, res) => {
   try {
     const plans = await installmentPlanService.getCompleted(resolveTenantId(req));
-    res.json(plans);
+    res.json(publicPlans(plans));
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -32,7 +42,7 @@ const getPlanById = async (req, res) => {
   try {
     const plan = await installmentPlanService.getById(resolveTenantId(req), req.params.id);
     if (!plan) return res.status(404).json({ error: 'Installment plan not found' });
-    res.json(plan);
+    res.json(publicPlan(plan));
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -44,9 +54,29 @@ const getPlansByCustomer = async (req, res) => {
       resolveTenantId(req),
       req.params.customerId
     );
-    res.json(plans);
+    res.json(publicPlans(plans));
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const getCustomerIdImage = async (req, res) => {
+  try {
+    const plan = await installmentPlanService.getById(resolveTenantId(req), req.params.id);
+    if (!plan) return res.status(404).json({ error: 'Installment plan not found' });
+
+    const file = resolveWitnessImageFile(plan.customer_id_image_path);
+    if (!file || !fs.existsSync(file)) {
+      return res.status(404).json({ error: 'ID image not found' });
+    }
+
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.type('jpeg');
+    return res.sendFile(file);
+  } catch (error) {
+    console.error('Customer ID image error:', error);
+    return res.status(500).json({ error: 'Server error' });
   }
 };
 
@@ -62,7 +92,7 @@ const updatePlanStatus = async (req, res) => {
       status
     );
     if (!plan) return res.status(404).json({ error: 'Installment plan not found' });
-    res.json(plan);
+    res.json(publicPlan(plan));
   } catch (error) {
     res.status(500).json({ error: 'Server error' });
   }
@@ -74,5 +104,6 @@ module.exports = {
   getCompletedPlans,
   getPlanById,
   getPlansByCustomer,
+  getCustomerIdImage,
   updatePlanStatus,
 };
