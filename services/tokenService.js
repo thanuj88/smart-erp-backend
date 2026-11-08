@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const { jwtSecret } = require('../config/config');
@@ -30,7 +31,8 @@ function signAccessToken(user, trialEndsAt, permissions = []) {
 
 function signRefreshToken(user) {
   return jwt.sign(
-    { sub: user.id, type: 'refresh' },
+    // jti keeps two tokens minted in the same second distinct, so revoking one never revives another.
+    { sub: user.id, type: 'refresh', jti: crypto.randomUUID() },
     authConfig.jwtRefreshSecret,
     { expiresIn: `${authConfig.refreshTokenExpiryDays}d` }
   );
@@ -61,6 +63,10 @@ async function revokeRefreshToken(refreshToken) {
   return getAuthRepository().revokeRefreshToken(refreshToken);
 }
 
+async function revokeAllRefreshTokens(userId) {
+  return getAuthRepository().revokeAllRefreshTokens(userId);
+}
+
 async function revokeRefreshTokenById(id, userId) {
   return getAuthRepository().revokeRefreshTokenById(id, userId);
 }
@@ -87,6 +93,7 @@ module.exports = {
   storeRefreshToken,
   findRefreshToken,
   revokeRefreshToken,
+  revokeAllRefreshTokens,
   revokeRefreshTokenById,
   listUserSessions,
   hashPin,

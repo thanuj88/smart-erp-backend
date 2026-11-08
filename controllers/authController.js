@@ -295,6 +295,14 @@ const refresh = async (req, res) => {
       return res.status(403).json({ error: blockReason });
     }
 
+    // Belt and braces for a refresh that was in flight while the password changed.
+    if (
+      user.password_changed_at &&
+      new Date(stored.created_at || stored.createdAt) < new Date(user.password_changed_at)
+    ) {
+      return res.status(401).json({ error: 'Refresh token revoked or expired' });
+    }
+
     await tokenService.revokeRefreshToken(refreshToken);
     const trial = user.tenant_id ? await getAuthRepository().getTrialForTenant(user.tenant_id) : null;
     const tokens = await issueTokenPair(user, req, trial?.ends_at);
@@ -380,6 +388,7 @@ const resetPassword = async (req, res) => {
     }
 
     const hash = await bcrypt.hash(newPassword, authConfig.bcryptRounds);
+    // updatePassword also revokes every refresh token for this user.
     await getAuthRepository().updatePassword(row.user_id, hash);
 
     await logAuthEvent({
@@ -435,7 +444,17 @@ const changePassword = async (req, res) => {
       ...clientMeta(req),
     });
 
-    res.json({ message: 'Password updated successfully' });
+    // Every other session was just signed out. Hand this device a fresh pair so the
+    // person who changed the password is not logged out with the rest.
+    const trial = user.tenant_id ? await getAuthRepository().getTrialForTenant(user.tenant_id) : null;
+    const tokens = await issueTokenPair(user, req, trial?.ends_at);
+
+    res.json({
+      message: 'Password updated successfully',
+      token: tokens.accessToken,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    });
   } catch (error) {
     console.error('Change password error:', error);
     res.status(500).json({ error: 'Server error' });
