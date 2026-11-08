@@ -95,7 +95,7 @@ app.listen(port, () => {
   console.log(`\n📝 Default credentials (after fresh seed — see backend/DYNAMODB.md):`);
   console.log(`   Super Admin  - superadmin@platform.local / superadmin123`);
   console.log(`   Tenant Admin - admin@brightmart.local / admin123`);
-  console.log(`   Teller       - teller@brightmart.local / teller123 (PIN: 1234)`);
+  console.log(`   Teller       - teller@brightmart.local / teller123`);
   console.log(`   Manager      - manager@brightmart.local / manager123`);
   console.log(`   Accountant   - accountant@brightmart.local / accountant123\n`);
 });

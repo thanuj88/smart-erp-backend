@@ -99,7 +99,7 @@ On first boot the API creates the table and seeds **Bright Mart** if accounts ar
 | --- | --- | --- |
 | Super admin | `superadmin@platform.local` | `superadmin123` |
 | Tenant admin | `admin@brightmart.local` | `admin123` |
-| Teller | `teller@brightmart.local` | `teller123` (PIN `1234`) |
+| Teller | `teller@brightmart.local` | `teller123` (no PIN; set `DEMO_TELLER_PIN`, 6 to 8 digits) |
 | Manager | `manager@brightmart.local` | `manager123` |
 | Accountant | `accountant@brightmart.local` | `accountant123` |
 

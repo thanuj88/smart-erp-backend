@@ -69,7 +69,7 @@ Also runs automatically when the API starts (missing items only).
 |------|-------|----------|--------|
 | Super Admin | `superadmin@platform.local` | `superadmin123` | Platform |
 | Tenant Admin | `admin@brightmart.local` | `admin123` | Bright Mart store |
-| Teller | `teller@brightmart.local` | `teller123` | PIN: `1234` |
+| Teller | `teller@brightmart.local` | `teller123` | PIN: none (set `DEMO_TELLER_PIN`, 6 to 8 digits) |
 | Manager | `manager@brightmart.local` | `manager123` | |
 | Accountant | `accountant@brightmart.local` | `accountant123` | |
 
