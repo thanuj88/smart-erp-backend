@@ -1,3 +1,4 @@
+const fs = require('fs');
 const { TransactWriteCommand, GetCommand } = require('@aws-sdk/lib-dynamodb');
 const BaseDynamoRepository = require('./baseDynamoRepository');
 const ENTITY = require('../entityTypes');
@@ -12,12 +13,15 @@ const installmentSettingDynamoRepository = require('./installmentSettingDynamoRe
 const returnDynamoRepository = require('./returnDynamoRepository');
 const promotionDynamoRepository = require('./promotionDynamoRepository');
 const { resolveOrderNumber, normalizeOrderNumber } = require('../../utils/orderId');
-const { savePrivateWitnessImage } = require('../../utils/privateUpload');
+const { savePrivateWitnessImage, resolveWitnessImageFile } = require('../../utils/privateUpload');
+const { MAX_INSTALLMENT_LINES, mergeInstallmentLines } = require('../../utils/installmentLines');
 const { priceBill, bookedUnitPrice, saleChargeFields, readChargeInput, roundMoney } = require('../../utils/salePricing');
 
 const RETURN_TYPES = ['cash', 'defect', 'warranty'];
 // DynamoDB deletes the marker after this. While the item still exists, a repeat key replays the sale.
 const IDEMPOTENCY_TTL_SECONDS = 7 * 24 * 60 * 60;
+// Sale put + stock update per line, one plan, up to 12 payments, optional witness.
+const DYNAMO_TRANSACT_LIMIT = 100;
 
 function idempotencyExpiresAt(isoDate) {
   const createdMs = Date.parse(isoDate);
@@ -394,11 +398,30 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     return ids.some((id) => tellerSaleIds.has(id));
   }
 
+  _putIfAbsent(tableName, item) {
+    return {
+      Put: {
+        TableName: tableName,
+        Item: item,
+        ConditionExpression: 'attribute_not_exists(PK)',
+      },
+    };
+  }
+
+  async _discardWitnessImage(storedPath) {
+    const full = resolveWitnessImageFile(storedPath);
+    if (!full) return;
+    await fs.promises.unlink(full).catch(() => {});
+  }
+
   async processInstallmentSale(tenantId, user, payload) {
     const { customer, witness, downPayment, installmentMonths, orderNumber } = payload;
-    const lines = Array.isArray(payload.lines) ? payload.lines : [];
-    if (!lines.length) {
-      throw Object.assign(new Error('At least one bill line is required'), { status: 400 });
+    const lines = mergeInstallmentLines(Array.isArray(payload.lines) ? payload.lines : []);
+    if (lines.length > MAX_INSTALLMENT_LINES) {
+      throw Object.assign(
+        new Error(`An installment sale can have at most ${MAX_INSTALLMENT_LINES} different products`),
+        { status: 400 }
+      );
     }
 
     const includeWitness = payload.includeWitness !== false && Boolean(witness);
@@ -441,6 +464,12 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     const interestAmount = (remainingAmount * settings.interest_rate) / 100;
     const totalWithInterest = remainingAmount + interestAmount;
     const monthlyPayment = totalWithInterest / installmentMonths;
+    const paymentCount = Math.floor(Number(installmentMonths));
+    const witnessInBill = includeWitness && Boolean(witness);
+    const actionCount = priced.lines.length * 2 + 1 + paymentCount + (witnessInBill ? 1 : 0);
+    if (!Number.isInteger(paymentCount) || paymentCount < 1 || actionCount > DYNAMO_TRANSACT_LIMIT) {
+      throw Object.assign(new Error('Installment bill is too large to book in one transaction'), { status: 400 });
+    }
 
     const existingCustomer = customer.memberId
       ? await customerDynamoRepository.getById(tenantId, customer.memberId)
@@ -448,30 +477,28 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     const customerId = existingCustomer ? existingCustomer.id : null;
     const customerName = existingCustomer?.name || String(customer.name || '').trim() || null;
     const customerPhone = existingCustomer?.phone || String(customer.phone || '').trim() || null;
+    // Kept on the plan so the POS can find it by NIC, including walk-in customers who are not in CRM.
+    const customerIdCard =
+      existingCustomer?.id_card_no || String(customer.idCardNo || '').trim() || null;
 
-    let witnessId = null;
-    if (includeWitness && witness) {
-      let witnessIdImage = null;
-      if (witness.idImage) {
-        witnessIdImage = savePrivateWitnessImage(witness.idImage);
-      }
+    // The customer's ID photo is stored privately, the same way as the witness photo.
+    const customerIdImagePath = customer.idImage ? savePrivateWitnessImage(customer.idImage) : null;
 
-      const createdWitness = await witnessDynamoRepository.create(tenantId, {
-        ...witness,
-        idImagePath: witnessIdImage,
-      });
-      witnessId = createdWitness.id;
+    let witnessIdImage = null;
+    if (witnessInBill && witness.idImage) {
+      witnessIdImage = savePrivateWitnessImage(witness.idImage);
     }
 
     const saleDate = new Date().toISOString();
-    const firstSaleId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
+    const stamp = Date.now();
+    const firstSaleId = `${stamp}${Math.floor(Math.random() * 1000)}`;
     const resolvedOrderNumber = resolveOrderNumber(orderNumber, firstSaleId);
-    const sales = [];
+    const tableName = databaseConfig.dynamodb.tableName;
 
-    for (let i = 0; i < priced.lines.length; i += 1) {
-      const line = priced.lines[i];
-      const saleId = i === 0 ? firstSaleId : `${Date.now()}${i}${Math.floor(Math.random() * 10000)}`;
-      const sale = await this.put(tenantId, saleId, {
+    const saleRecords = priced.lines.map((line, index) => {
+      const saleId = index === 0 ? firstSaleId : `${stamp}${index}${Math.floor(Math.random() * 10000)}`;
+      return this.toRecord(tenantId, saleId, {
+        id: String(saleId),
         item_id: String(line.itemId),
         item_name: line.item.name,
         quantity: line.quantity,
@@ -487,18 +514,23 @@ class OrderDynamoRepository extends BaseDynamoRepository {
         teller_id: user.id,
         teller_name: user.username,
         sale_date: saleDate,
+        createdAt: saleDate,
       });
-      sales.push(sale);
-    }
+    });
 
-    const saleIds = sales.map((sale) => sale.id);
-    const plan = await installmentPlanDynamoRepository.create(tenantId, {
+    const saleIds = saleRecords.map((record) => record.entityId);
+    const planId = `${stamp}p${Math.floor(Math.random() * 10000)}`;
+    const witnessId = witnessInBill ? `${stamp}w${Math.floor(Math.random() * 10000)}` : null;
+    const planRecord = installmentPlanDynamoRepository.toRecord(tenantId, planId, {
+      id: String(planId),
       sale_id: saleIds[0],
       sale_ids: saleIds,
       order_number: resolvedOrderNumber,
       customer_id: customerId,
       customer_name: customerName,
       customer_phone: customerPhone,
+      customer_id_card: customerIdCard,
+      customer_id_image_path: customerIdImagePath,
       witness_id: witnessId,
       total_amount: totalAmount,
       down_payment: downPayment,
@@ -508,31 +540,92 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       total_with_interest: totalWithInterest,
       installment_months: installmentMonths,
       monthly_payment: monthlyPayment,
+      paid_amount: 0,
+      status: 'active',
+      tenant_id: tenantId,
+      createdAt: saleDate,
     });
 
-    const payments = [];
+    const paymentRecords = [];
     const startDate = new Date();
-    for (let i = 1; i <= installmentMonths; i++) {
+    for (let i = 1; i <= paymentCount; i += 1) {
       const dueDate = new Date(startDate);
       dueDate.setMonth(dueDate.getMonth() + i);
-      const payment = await installmentPaymentDynamoRepository.create(tenantId, {
-        installment_plan_id: plan.id,
-        payment_number: i,
-        amount_due: monthlyPayment,
-        due_date: dueDate.toISOString().split('T')[0],
+      const paymentId = `${stamp}pay${i}${Math.floor(Math.random() * 10000)}`;
+      paymentRecords.push(
+        installmentPaymentDynamoRepository.toRecord(tenantId, paymentId, {
+          id: String(paymentId),
+          installment_plan_id: String(planId),
+          payment_number: i,
+          amount_due: monthlyPayment,
+          amount_paid: 0,
+          due_date: dueDate.toISOString().split('T')[0],
+          status: 'pending',
+          tenant_id: tenantId,
+          createdAt: saleDate,
+        })
+      );
+    }
+
+    const witnessRecord = witnessInBill
+      ? witnessDynamoRepository.toRecord(tenantId, witnessId, {
+          id: String(witnessId),
+          name: witness.name,
+          phone: witness.phone,
+          id_card_no: witness.idCardNo ?? witness.id_card_no,
+          address: witness.address,
+          id_image_path: witnessIdImage,
+          tenant_id: tenantId,
+          createdAt: saleDate,
+        })
+      : null;
+
+    // One transaction: every sale, the plan, the schedule, the witness, and every
+    // stock deduction. A failed quantity check cancels the whole bill.
+    const transactItems = [];
+    priced.lines.forEach((line, index) => {
+      transactItems.push(this._putIfAbsent(tableName, saleRecords[index]));
+      transactItems.push({
+        Update: {
+          TableName: tableName,
+          Key: {
+            PK: productDynamoRepository.pk(tenantId),
+            SK: productDynamoRepository.sk(line.itemId),
+          },
+          UpdateExpression: 'SET quantity = quantity - :qty, updatedAt = :now',
+          ConditionExpression: 'quantity >= :qty',
+          ExpressionAttributeValues: { ':qty': line.quantity, ':now': saleDate },
+        },
       });
-      payments.push(payment);
+    });
+    transactItems.push(this._putIfAbsent(tableName, planRecord));
+    paymentRecords.forEach((record) => transactItems.push(this._putIfAbsent(tableName, record)));
+    if (witnessRecord) transactItems.push(this._putIfAbsent(tableName, witnessRecord));
+
+    try {
+      await this.client.send(new TransactWriteCommand({ TransactItems: transactItems }));
+    } catch (error) {
+      await this._discardWitnessImage(witnessIdImage);
+      if (error.name !== 'TransactionCanceledException') throw error;
+      const reasons = error.CancellationReasons || [];
+      for (let index = 0; index < priced.lines.length; index += 1) {
+        if (reasons[index * 2 + 1]?.Code === 'ConditionalCheckFailed') {
+          const fresh = await productDynamoRepository.getById(tenantId, priced.lines[index].itemId);
+          throw Object.assign(
+            new Error(`Insufficient stock for ${priced.lines[index].item.name}`),
+            { status: 400, available: fresh?.quantity ?? 0 }
+          );
+        }
+      }
+      throw error;
     }
 
-    for (const line of resolvedLines) {
-      await productDynamoRepository.decrementQuantity(tenantId, line.itemId, line.quantity);
-    }
-
+    const sales = saleRecords.map((record) => this.fromRecord(record));
     return {
       sale: sales[0],
       sales,
-      plan,
-      payments,
+      plan: installmentPlanDynamoRepository.fromRecord(planRecord),
+      payments: paymentRecords.map((record) => installmentPaymentDynamoRepository.fromRecord(record)),
       total: priced.grandTotal,
       charges: {
         itemsTotal: priced.itemsTotal,
@@ -720,32 +813,80 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     return returnDynamoRepository.getAll(tenantId);
   }
 
-  async _adjustInstallmentForReturn(tenantId, order, refundValue, isFullReturn) {
+  /**
+   * Works out what a return does to an installment plan, without writing anything.
+   * The updates are returned as transaction actions so they commit with the stock and the return.
+   *   cash   - money goes back to the customer, first against the unpaid balance.
+   *   defect - no cash, but the customer stops owing for the item (unpaid balance drops).
+   * Warranty is a 1-for-1 replacement, so the plan never calls this.
+   */
+  _planInstallmentReturn(tenantId, order, refundValue, isFullReturn, { paysCash }) {
     const plan = order.plan;
     if (!plan) {
-      return { refund_cash: refundValue, status: null };
+      return { adjustment: { refund_cash: paysCash ? refundValue : 0, status: null }, actions: [] };
     }
 
+    const tableName = databaseConfig.dynamodb.tableName;
+    const now = new Date().toISOString();
     const payments = plan.payments || [];
     const pending = payments.filter((p) => p.status === 'pending');
     const paidAmount = Number(plan.paid_amount) || 0;
     const downPayment = Number(plan.down_payment) || 0;
     const unpaidBalance = Math.max(0, Number(plan.total_with_interest || 0) - paidAmount);
+    const actions = [];
+
+    const planKey = {
+      PK: installmentPlanDynamoRepository.pk(tenantId),
+      SK: installmentPlanDynamoRepository.sk(plan.id),
+    };
+    // Payments can be collected while a return is being keyed in. Both writes only apply
+    // if the plan and its open installments are still as we read them.
+    const planAction = (data) => ({
+      Update: {
+        TableName: tableName,
+        Key: planKey,
+        UpdateExpression:
+          'SET remaining_amount = :remaining, monthly_payment = :monthly, #st = :status, updatedAt = :now',
+        ConditionExpression: 'attribute_exists(PK) AND (attribute_not_exists(paid_amount) OR paid_amount = :paid)',
+        ExpressionAttributeNames: { '#st': 'status' },
+        ExpressionAttributeValues: {
+          ':remaining': data.remaining_amount,
+          ':monthly': data.monthly_payment,
+          ':status': data.status,
+          ':paid': paidAmount,
+          ':now': now,
+        },
+      },
+    });
+    const paymentAction = (payment, set, values) => ({
+      Update: {
+        TableName: tableName,
+        Key: {
+          PK: installmentPaymentDynamoRepository.pk(tenantId),
+          SK: installmentPaymentDynamoRepository.sk(payment.id),
+        },
+        UpdateExpression: `SET ${set}, updatedAt = :now`,
+        ConditionExpression: '#st = :pending',
+        ExpressionAttributeNames: { '#st': 'status' },
+        ExpressionAttributeValues: { ':pending': 'pending', ':now': now, ...values },
+      },
+    });
+    const cancelPending = () =>
+      pending.forEach((payment) =>
+        actions.push(paymentAction(payment, '#st = :cancelled', { ':cancelled': 'cancelled' }))
+      );
 
     if (isFullReturn) {
-      for (const payment of pending) {
-        await installmentPaymentDynamoRepository.update(tenantId, payment.id, { status: 'cancelled' });
-      }
-      await installmentPlanDynamoRepository.update(tenantId, plan.id, {
-        remaining_amount: 0,
-        monthly_payment: 0,
-        status: 'cancelled',
-      });
+      cancelPending();
+      actions.push(planAction({ remaining_amount: 0, monthly_payment: 0, status: 'cancelled' }));
       return {
-        refund_cash: downPayment + paidAmount,
-        unpaid_after: 0,
-        status: 'cancelled',
-        plan_id: plan.id,
+        adjustment: {
+          refund_cash: paysCash ? downPayment + paidAmount : 0,
+          unpaid_after: 0,
+          status: 'cancelled',
+          plan_id: plan.id,
+        },
+        actions,
       };
     }
 
@@ -754,45 +895,43 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     if (refundValue <= unpaidBalance) {
       unpaidAfter = unpaidBalance - refundValue;
     } else {
-      refundCash = refundValue - unpaidBalance;
+      refundCash = paysCash ? refundValue - unpaidBalance : 0;
       unpaidAfter = 0;
     }
 
     if (!pending.length || unpaidAfter <= 0.009) {
-      for (const payment of pending) {
-        await installmentPaymentDynamoRepository.update(tenantId, payment.id, { status: 'cancelled' });
-      }
-      await installmentPlanDynamoRepository.update(tenantId, plan.id, {
-        remaining_amount: 0,
-        monthly_payment: 0,
-        status: paidAmount + downPayment > 0 ? 'completed' : 'cancelled',
-      });
+      const status = paidAmount + downPayment > 0 ? 'completed' : 'cancelled';
+      cancelPending();
+      actions.push(planAction({ remaining_amount: 0, monthly_payment: 0, status }));
       return {
-        refund_cash: refundCash,
-        unpaid_after: 0,
-        status: paidAmount + downPayment > 0 ? 'completed' : 'cancelled',
-        plan_id: plan.id,
+        adjustment: { refund_cash: refundCash, unpaid_after: 0, status, plan_id: plan.id },
+        actions,
       };
     }
 
     const monthly = unpaidAfter / pending.length;
-    for (const payment of pending) {
-      await installmentPaymentDynamoRepository.update(tenantId, payment.id, { amount_due: monthly });
-    }
-    await installmentPlanDynamoRepository.update(tenantId, plan.id, {
-      remaining_amount: unpaidAfter,
-      monthly_payment: monthly,
-      status: 'adjusted',
-    });
+    pending.forEach((payment) =>
+      actions.push(paymentAction(payment, 'amount_due = :monthly', { ':monthly': monthly }))
+    );
+    actions.push(planAction({ remaining_amount: unpaidAfter, monthly_payment: monthly, status: 'adjusted' }));
     return {
-      refund_cash: refundCash,
-      unpaid_after: unpaidAfter,
-      monthly_payment: monthly,
-      status: 'adjusted',
-      plan_id: plan.id,
+      adjustment: {
+        refund_cash: refundCash,
+        unpaid_after: unpaidAfter,
+        monthly_payment: monthly,
+        status: 'adjusted',
+        plan_id: plan.id,
+      },
+      actions,
     };
   }
 
+  /**
+   * A return is one DynamoDB transaction: every sale line's returned_qty, the return stock
+   * (and, for warranty, the sellable stock), the installment plan, the return record and the
+   * ledger rows. Each sale line only moves if returned_qty is still what we read, so the same
+   * unit cannot be returned twice and a failure leaves nothing half-applied.
+   */
   async processReturn(tenantId, user, { orderNumber, lines, reason, returnType }) {
     const order = await this.getOrderByNumber(tenantId, orderNumber);
     if (!order) {
@@ -802,11 +941,16 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     const type = RETURN_TYPES.includes(returnType) ? returnType : 'cash';
     const requested = Array.isArray(lines) ? lines : [];
     const returnLines = [];
+    const seenSales = new Set();
     for (const row of requested) {
       const sale = order.lines.find((line) => String(line.id) === String(row.saleId || row.sale_id));
       if (!sale) {
         throw Object.assign(new Error('Sale line not found on this order'), { status: 400 });
       }
+      if (seenSales.has(String(sale.id))) {
+        throw Object.assign(new Error('Each sale line can only appear once in a return'), { status: 400 });
+      }
+      seenSales.add(String(sale.id));
       const qty = Number(row.quantity);
       if (!Number.isInteger(qty) || qty < 1) {
         throw Object.assign(new Error('Each return line needs a quantity of at least 1'), { status: 400 });
@@ -841,15 +985,28 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       throw Object.assign(new Error('Select at least one item to return'), { status: 400 });
     }
 
+    // Two sale lines can be the same product; one transaction may only touch an item once.
+    const qtyByProduct = new Map();
+    for (const line of returnLines) {
+      if (!line.item_id) continue;
+      const key = String(line.item_id);
+      qtyByProduct.set(key, (qtyByProduct.get(key) || 0) + line.qty);
+    }
+    const products = new Map();
+    for (const itemId of qtyByProduct.keys()) {
+      const product = await productDynamoRepository.getById(tenantId, itemId);
+      if (product) products.set(itemId, product);
+    }
+
     if (type === 'warranty') {
-      for (const line of returnLines) {
-        if (!line.item_id) continue;
-        const product = await productDynamoRepository.getById(tenantId, line.item_id);
-        if (!product || (product.quantity ?? 0) < line.qty) {
-          throw Object.assign(
-            new Error(`Not enough sellable stock to replace ${line.item_name}`),
-            { status: 400, available: product?.quantity ?? 0 }
-          );
+      for (const [itemId, qty] of qtyByProduct) {
+        const product = products.get(itemId);
+        if (!product || (product.quantity ?? 0) < qty) {
+          const name = returnLines.find((line) => String(line.item_id) === itemId)?.item_name;
+          throw Object.assign(new Error(`Not enough sellable stock to replace ${name}`), {
+            status: 400,
+            available: product?.quantity ?? 0,
+          });
         }
       }
     }
@@ -861,36 +1018,26 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     });
     const isFullReturn = remainingAfter.every((qty) => qty <= 0);
 
-    let refundCash = 0;
+    let refundCash = type === 'cash' ? refundValue : 0;
     let installmentAdjustment = null;
-    if (type === 'cash') {
-      refundCash = refundValue;
-      if (order.payment_type === 'installment') {
-        installmentAdjustment = await this._adjustInstallmentForReturn(
-          tenantId,
-          order,
-          refundValue,
-          isFullReturn
-        );
-        refundCash = installmentAdjustment.refund_cash;
-      }
-    }
-
-    for (const line of returnLines) {
-      await this.update(tenantId, line.sale_id, {
-        returned_qty: line.previous_returned + line.qty,
+    let planActions = [];
+    if (order.payment_type === 'installment' && (type === 'cash' || type === 'defect')) {
+      const planned = this._planInstallmentReturn(tenantId, order, refundValue, isFullReturn, {
+        paysCash: type === 'cash',
       });
-      if (!line.item_id) continue;
-      await productDynamoRepository.incrementReturnQuantity(tenantId, line.item_id, line.qty);
-      if (type === 'warranty') {
-        await productDynamoRepository.decrementQuantity(tenantId, line.item_id, line.qty);
-      }
+      installmentAdjustment = planned.adjustment;
+      planActions = planned.actions;
+      refundCash = planned.adjustment.refund_cash;
     }
 
+    const tableName = databaseConfig.dynamodb.tableName;
+    const now = new Date().toISOString();
     const returnId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
     const returnNumber = `RET${String(Date.now()).slice(-6)}`;
     const tellerName = user.full_name || user.fullName || user.username;
-    const record = await returnDynamoRepository.put(tenantId, returnId, {
+
+    const returnRecord = returnDynamoRepository.toRecord(tenantId, returnId, {
+      id: String(returnId),
       return_number: returnNumber,
       order_number: order.order_number,
       payment_type: order.payment_type,
@@ -905,7 +1052,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       teller_name: tellerName,
     });
 
-    await this._recordReturnSales(tenantId, user, {
+    const ledgerRecords = await this._buildReturnSaleRecords(tenantId, user, {
       orderNumber: order.order_number,
       returnNumber,
       returnType: type,
@@ -913,15 +1060,88 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       refundValue,
       refundCash,
       tellerName,
+      products,
     });
 
+    const transactItems = [];
+    // 1. Sale lines: only move if nobody returned against them since we read them.
+    returnLines.forEach((line) => {
+      transactItems.push({
+        Update: {
+          TableName: tableName,
+          Key: { PK: this.pk(tenantId), SK: this.sk(line.sale_id) },
+          UpdateExpression: 'SET returned_qty = :next, updatedAt = :now',
+          ConditionExpression: 'attribute_exists(PK) AND (attribute_not_exists(returned_qty) OR returned_qty = :prev)',
+          ExpressionAttributeValues: {
+            ':next': line.previous_returned + line.qty,
+            ':prev': line.previous_returned,
+            ':now': now,
+          },
+        },
+      });
+    });
+    // 2. Product stock: returned units go to return stock; warranty also takes a sellable replacement.
+    const stockSlots = [];
+    for (const [itemId, qty] of qtyByProduct) {
+      if (!products.has(itemId)) continue; // product was deleted; nothing to restock
+      stockSlots.push(itemId);
+      transactItems.push({
+        Update: {
+          TableName: tableName,
+          Key: { PK: productDynamoRepository.pk(tenantId), SK: productDynamoRepository.sk(itemId) },
+          UpdateExpression:
+            type === 'warranty'
+              ? 'SET return_quantity = if_not_exists(return_quantity, :zero) + :q, quantity = quantity - :q, updatedAt = :now'
+              : 'SET return_quantity = if_not_exists(return_quantity, :zero) + :q, updatedAt = :now',
+          ConditionExpression: type === 'warranty' ? 'attribute_exists(PK) AND quantity >= :q' : 'attribute_exists(PK)',
+          ExpressionAttributeValues: { ':q': qty, ':zero': 0, ':now': now },
+        },
+      });
+    }
+    // 3. Installment plan, the return record, and the ledger rows.
+    const planStart = transactItems.length;
+    planActions.forEach((action) => transactItems.push(action));
+    transactItems.push(this._putIfAbsent(tableName, returnRecord));
+    ledgerRecords.forEach((record) => transactItems.push(this._putIfAbsent(tableName, record)));
+
+    if (transactItems.length > DYNAMO_TRANSACT_LIMIT) {
+      throw Object.assign(
+        new Error('This return touches too many lines at once. Return fewer lines per request.'),
+        { status: 400 }
+      );
+    }
+
+    try {
+      await this.client.send(new TransactWriteCommand({ TransactItems: transactItems }));
+    } catch (error) {
+      if (error.name !== 'TransactionCanceledException') throw error;
+      const reasons = error.CancellationReasons || [];
+      const failed = reasons.findIndex((reason) => reason?.Code === 'ConditionalCheckFailed');
+      if (failed >= 0 && failed >= returnLines.length && failed < returnLines.length + stockSlots.length && type === 'warranty') {
+        const name = returnLines.find((line) => String(line.item_id) === stockSlots[failed - returnLines.length])?.item_name;
+        throw Object.assign(new Error(`Not enough sellable stock to replace ${name}`), { status: 400 });
+      }
+      if (failed >= 0) {
+        const where = failed < returnLines.length ? 'sale' : failed < planStart ? 'stock' : 'plan';
+        throw Object.assign(
+          new Error(
+            where === 'sale'
+              ? 'This order was already returned against. Reload the order and try again.'
+              : 'Stock or the installment plan changed while returning. Reload the order and try again.'
+          ),
+          { status: 409 }
+        );
+      }
+      throw error;
+    }
+
     return {
-      ...record,
+      ...returnDynamoRepository.fromRecord(returnRecord),
       order: await this.getOrderByNumber(tenantId, order.order_number),
     };
   }
 
-  async _recordReturnSales(tenantId, user, {
+  async _buildReturnSaleRecords(tenantId, user, {
     orderNumber,
     returnNumber,
     returnType,
@@ -929,8 +1149,10 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     refundValue,
     refundCash,
     tellerName,
+    products = new Map(),
   }) {
     const saleDate = new Date().toISOString();
+    const records = [];
     for (let i = 0; i < returnLines.length; i += 1) {
       const line = returnLines[i];
       const lineTotal = Number(line.line_total) || 0;
@@ -944,34 +1166,40 @@ class OrderDynamoRepository extends BaseDynamoRepository {
         category_name: line.category_name || '',
       };
       if (!category.category_name && line.item_id) {
-        const product = await productDynamoRepository.getById(tenantId, line.item_id);
+        const product =
+          products.get(String(line.item_id)) ||
+          (await productDynamoRepository.getById(tenantId, line.item_id));
         category = this._categoryFromProduct(product, line);
       }
       const saleId = `${Date.now()}${Math.floor(Math.random() * 1000)}${i}`;
-      await this.put(tenantId, saleId, {
-        item_id: line.item_id ? String(line.item_id) : null,
-        item_name: line.item_name,
-        quantity: line.qty,
-        buying_price: line.buying_price,
-        selling_price: line.selling_price,
-        price: line.unit_price,
-        total: -cashOut,
-        profit: lineTotal > 0 && cashOut ? -((unitProfit * line.qty * cashOut) / lineTotal) : 0,
-        payment_type: returnType === 'cash' ? 'cash' : 'return',
-        is_return: true,
-        return_flag: true,
-        return_type: returnType,
-        return_number: returnNumber,
-        original_sale_id: line.sale_id,
-        returned_qty: line.qty,
-        ...category,
-        order_number: orderNumber,
-        teller_id: user.id,
-        teller_name: tellerName,
-        sale_date: saleDate,
-        tenant_id: tenantId,
-      });
+      records.push(
+        this.toRecord(tenantId, saleId, {
+          id: String(saleId),
+          item_id: line.item_id ? String(line.item_id) : null,
+          item_name: line.item_name,
+          quantity: line.qty,
+          buying_price: line.buying_price,
+          selling_price: line.selling_price,
+          price: line.unit_price,
+          total: -cashOut,
+          profit: lineTotal > 0 && cashOut ? -((unitProfit * line.qty * cashOut) / lineTotal) : 0,
+          payment_type: returnType === 'cash' ? 'cash' : 'return',
+          is_return: true,
+          return_flag: true,
+          return_type: returnType,
+          return_number: returnNumber,
+          original_sale_id: line.sale_id,
+          returned_qty: line.qty,
+          ...category,
+          order_number: orderNumber,
+          teller_id: user.id,
+          teller_name: tellerName,
+          sale_date: saleDate,
+          tenant_id: tenantId,
+        })
+      );
     }
+    return records;
   }
 }
 

@@ -65,11 +65,15 @@ Also runs automatically when the API starts (missing items only).
 
 ### Default logins (after fresh seed)
 
+Local development only (`NODE_ENV=development` or `test`). Any other `NODE_ENV` does not create the demo shop or these
+accounts, and the server no longer prints these credentials on boot. In a deployed environment the super admin is created
+only if `SUPER_ADMIN_PASSWORD` is set to a unique value of 12+ characters before the first start.
+
 | Role | Email | Password | Notes |
 |------|-------|----------|--------|
 | Super Admin | `superadmin@platform.local` | `superadmin123` | Platform |
 | Tenant Admin | `admin@brightmart.local` | `admin123` | Bright Mart store |
-| Teller | `teller@brightmart.local` | `teller123` | PIN: `1234` |
+| Teller | `teller@brightmart.local` | `teller123` | PIN: none (set `DEMO_TELLER_PIN`, 6 to 8 digits) |
 | Manager | `manager@brightmart.local` | `manager123` | |
 | Accountant | `accountant@brightmart.local` | `accountant123` | |
 

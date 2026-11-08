@@ -1,7 +1,7 @@
 const bcrypt = require('bcryptjs');
 const { getAuthRepository } = require('../repositories/factory');
 const authConfig = require('../config/auth');
-const { ROLES, normalizeRole } = require('../config/permissions');
+const { ROLES, normalizeRole, userHasAnyPermission, PERMISSIONS } = require('../config/permissions');
 const permissionService = require('../services/permissionService');
 const tenantSettingsService = require('../services/tenantSettingsService');
 const { logAuthEvent } = require('../services/auditService');
@@ -312,6 +312,14 @@ const refresh = async (req, res) => {
       return res.status(403).json({ error: blockReason });
     }
 
+    // Belt and braces for a refresh that was in flight while the password changed.
+    if (
+      user.password_changed_at &&
+      new Date(stored.created_at || stored.createdAt) < new Date(user.password_changed_at)
+    ) {
+      return res.status(401).json({ error: 'Refresh token revoked or expired' });
+    }
+
     await tokenService.revokeRefreshToken(refreshToken);
     const trial = user.tenant_id ? await getAuthRepository().getTrialForTenant(user.tenant_id) : null;
     const tokens = await issueTokenPair(user, req, trial?.ends_at);
@@ -397,6 +405,7 @@ const resetPassword = async (req, res) => {
     }
 
     const hash = await bcrypt.hash(newPassword, authConfig.bcryptRounds);
+    // updatePassword also revokes every refresh token for this user.
     await getAuthRepository().updatePassword(row.user_id, hash);
 
     await logAuthEvent({
@@ -452,7 +461,17 @@ const changePassword = async (req, res) => {
       ...clientMeta(req),
     });
 
-    res.json({ message: 'Password updated successfully' });
+    // Every other session was just signed out. Hand this device a fresh pair so the
+    // person who changed the password is not logged out with the rest.
+    const trial = user.tenant_id ? await getAuthRepository().getTrialForTenant(user.tenant_id) : null;
+    const tokens = await issueTokenPair(user, req, trial?.ends_at);
+
+    res.json({
+      message: 'Password updated successfully',
+      token: tokens.accessToken,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+    });
   } catch (error) {
     console.error('Change password error:', error);
     res.status(500).json({ error: 'Server error' });
@@ -479,8 +498,20 @@ const revokeSession = async (req, res) => {
 
 const listBranches = async (req, res) => {
   try {
-    const tenantId = req.query.tenantId;
-    if (!tenantId) {
+    const isPlatform = userHasAnyPermission(req.user?.permissions, [PERMISSIONS.PLATFORM_MANAGE]);
+    const ownTenant = req.user?.tenantId;
+    const requested = req.query.tenantId;
+
+    let tenantId = ownTenant;
+    if (isPlatform) {
+      if (requested == null || requested === '') {
+        return res.status(400).json({ error: 'tenantId is required for branch listing' });
+      }
+      tenantId = requested;
+    } else if (requested != null && requested !== '' && String(requested) !== String(ownTenant)) {
+      return res.status(403).json({ error: 'You can only list branches of your own shop' });
+    }
+    if (tenantId == null || tenantId === '') {
       return res.status(400).json({ error: 'tenantId is required for branch listing' });
     }
     const branches = await getAuthRepository().listBranchesForTenant(tenantId);
