@@ -106,8 +106,10 @@ test('server.js no longer prints demo credentials on boot', () => {
   assert.doesNotMatch(source, /superadmin123|admin123|teller123|manager123|accountant123|Default credentials/);
 });
 
-test('the seed script never prints passwords or PINs', () => {
-  const source = require('fs').readFileSync(path.join(__dirname, '..', 'scripts', 'seedDynamo.js'), 'utf8');
+// scripts/ is gitignored in this repo, so a fresh clone has no seed script to check.
+const seedFile = path.join(__dirname, '..', 'scripts', 'seedDynamo.js');
+test('the seed script never prints passwords or PINs', { skip: !require('fs').existsSync(seedFile) && 'scripts/seedDynamo.js is not in this checkout' }, () => {
+  const source = require('fs').readFileSync(seedFile, 'utf8');
   const logLines = source.split(/\r?\n/).filter((line) => /console\.(log|info|warn)/.test(line));
   assert.ok(logLines.length > 0);
   for (const line of logLines) {
