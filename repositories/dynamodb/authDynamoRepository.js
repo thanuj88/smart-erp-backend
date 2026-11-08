@@ -218,6 +218,7 @@ class AuthDynamoRepository {
       ...user,
       password: item.password ?? item.password_hash ?? item.passwordHash ?? null,
       pin_hash: item.pin_hash ?? item.pinHash ?? null,
+      password_changed_at: item.password_changed_at ?? null,
     };
   }
 
@@ -568,9 +569,26 @@ class AuthDynamoRepository {
     const tenantId = user.tenant_id ?? PLATFORM_TENANT;
     await this.users.update(tenantId, userId, {
       password: passwordHash,
+      password_changed_at: new Date().toISOString(),
       failed_login_attempts: 0,
       locked_until: null,
     });
+    // A new password ends every session. A stolen refresh token must not outlive the reset.
+    await this.revokeAllRefreshTokens(userId);
+  }
+
+  async revokeAllRefreshTokens(userId) {
+    const user = await this.findUserWithPassword(userId);
+    if (!user) return 0;
+    const tenantId = user.tenant_id ?? PLATFORM_TENANT;
+    const open = await this.refreshTokens.queryByTenant(tenantId, {
+      filter: (t) => String(t.user_id) === String(userId) && !t.revoked_at,
+    });
+    const revokedAt = new Date().toISOString();
+    await Promise.all(
+      open.map((token) => this.refreshTokens.update(tenantId, token.id, { revoked_at: revokedAt }))
+    );
+    return open.length;
   }
 
   async recordFailedLogin(userId) {
