@@ -4,6 +4,10 @@ const { applyHttpMiddleware, allowedOrigins } = require('./config/http');
 const { authenticate } = require('./middleware/auth');
 const { port } = require('./config/config');
 const databaseConfig = require('./config/dataStore');
+const { assertSecureConfig } = require('./config/secrets');
+
+// Before anything listens or seeds: a deployment on placeholder secrets must not come up.
+assertSecureConfig();
 
 const app = express();
 
@@ -101,12 +105,6 @@ app.use((err, req, res, next) => {
 app.listen(port, () => {
   console.log(`\n🚀 Server running on port ${port}`);
   console.log(`📡 API available at http://localhost:${port}/api`);
-  console.log(`\n📝 Default credentials (after fresh seed — see backend/DYNAMODB.md):`);
-  console.log(`   Super Admin  - superadmin@platform.local / superadmin123`);
-  console.log(`   Tenant Admin - admin@brightmart.local / admin123`);
-  console.log(`   Teller       - teller@brightmart.local / teller123 (PIN: 1234)`);
-  console.log(`   Manager      - manager@brightmart.local / manager123`);
-  console.log(`   Accountant   - accountant@brightmart.local / accountant123\n`);
 });
 
 module.exports = app;
