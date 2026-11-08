@@ -39,10 +39,16 @@ app.use('/api/installment-plans', require('./routes/installmentPlans'));
 app.use('/api/installment-payments', require('./routes/installmentPayments'));
 app.use('/api/platform', require('./routes/platform'));
 app.use('/api/settings', require('./routes/settings'));
+app.use('/api/witnesses', require('./routes/witnesses'));
+
+const { isBlockedUploadPath } = require('./utils/privateUpload');
 
 app.use(
   '/uploads',
   (req, res, next) => {
+    if (isBlockedUploadPath(req.path)) {
+      return res.status(404).json({ error: 'Not found' });
+    }
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     next();
