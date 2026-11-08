@@ -448,6 +448,9 @@ class OrderDynamoRepository extends BaseDynamoRepository {
     const customerId = existingCustomer ? existingCustomer.id : null;
     const customerName = existingCustomer?.name || String(customer.name || '').trim() || null;
     const customerPhone = existingCustomer?.phone || String(customer.phone || '').trim() || null;
+    // Kept on the plan so the POS can find it by NIC, including walk-in customers who are not in CRM.
+    const customerIdCard =
+      existingCustomer?.id_card_no || String(customer.idCardNo || '').trim() || null;
 
     let witnessId = null;
     if (includeWitness && witness) {
@@ -499,6 +502,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       customer_id: customerId,
       customer_name: customerName,
       customer_phone: customerPhone,
+      customer_id_card: customerIdCard,
       witness_id: witnessId,
       total_amount: totalAmount,
       down_payment: downPayment,
