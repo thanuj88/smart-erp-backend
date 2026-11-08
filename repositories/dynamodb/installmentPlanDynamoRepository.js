@@ -50,6 +50,7 @@ class InstallmentPlanDynamoRepository extends BaseDynamoRepository {
       customer_id: data.customer_id ?? data.customerId ?? null,
       customer_name: data.customer_name ?? data.customerName ?? null,
       customer_phone: data.customer_phone ?? data.customerPhone ?? null,
+      customer_id_image_path: data.customer_id_image_path ?? data.customerIdImagePath ?? null,
       witness_id: data.witness_id ?? data.witnessId,
       total_amount: data.total_amount ?? data.totalAmount,
       down_payment: data.down_payment ?? data.downPayment,

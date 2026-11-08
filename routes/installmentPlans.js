@@ -7,6 +7,7 @@ const {
   getPlanById,
   getActivePlans,
   getCompletedPlans,
+  getCustomerIdImage,
   updatePlanStatus
 } = require('../controllers/installmentPlanController');
 
@@ -22,6 +23,9 @@ router.get('/active', getActivePlans);
 
 // GET /api/installment-plans/completed - Get completed plans
 router.get('/completed', getCompletedPlans);
+
+// GET /api/installment-plans/:id/customer-id-image - Customer ID photo (private)
+router.get('/:id/customer-id-image', getCustomerIdImage);
 
 // GET /api/installment-plans/:id - Get plan by ID with payments
 router.get('/:id', getPlanById);
