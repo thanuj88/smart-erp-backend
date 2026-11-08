@@ -9,11 +9,18 @@ class InstallmentPlanDynamoRepository extends BaseDynamoRepository {
 
   async enrich(tenantId, plan) {
     if (!plan) return null;
-    if (plan.customer_name) return plan;
+    // Plans made for a CRM member can be missing name or NIC (older plans). Fill from the member.
+    if (plan.customer_name && plan.customer_id_card) return plan;
+    if (!plan.customer_id) return plan;
     const customer = await customerDynamoRepository.getById(tenantId, plan.customer_id);
     if (customer) {
-      plan.customer_name = customer.name;
-      plan.customer_phone = customer.phone;
+      if (!plan.customer_name) {
+        plan.customer_name = customer.name;
+        plan.customer_phone = customer.phone;
+      }
+      if (!plan.customer_id_card && customer.id_card_no) {
+        plan.customer_id_card = customer.id_card_no;
+      }
     }
     return plan;
   }
@@ -50,6 +57,7 @@ class InstallmentPlanDynamoRepository extends BaseDynamoRepository {
       customer_id: data.customer_id ?? data.customerId ?? null,
       customer_name: data.customer_name ?? data.customerName ?? null,
       customer_phone: data.customer_phone ?? data.customerPhone ?? null,
+      customer_id_card: data.customer_id_card ?? data.customerIdCard ?? null,
       customer_id_image_path: data.customer_id_image_path ?? data.customerIdImagePath ?? null,
       witness_id: data.witness_id ?? data.witnessId,
       total_amount: data.total_amount ?? data.totalAmount,

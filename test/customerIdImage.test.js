@@ -37,6 +37,8 @@ before(async () => {
 
   const app = express();
   app.use(express.json());
+  // authenticate reloads permissions from RBAC, so the role table has to exist.
+  await require('../services/permissionService').ensureSeeded();
   app.use('/api/installment-plans', require('../routes/installmentPlans'));
   await new Promise((resolve) => {
     server = app.listen(0, resolve);
@@ -58,10 +60,10 @@ const it = (name, fn) =>
     return fn(t);
   });
 
-const token = (tenantId, permissions = ['sales:create']) =>
-  tokenService.signAccessToken({ id: 'u', username: 'u', role: 'TELLER', tenant_id: tenantId }, null, permissions);
-const get = (path, tenantId = T, perms) =>
-  fetch(`${baseUrl}${path}`, { headers: { Authorization: `Bearer ${token(tenantId, perms)}` } });
+const token = (tenantId, permissions = ['sales:create'], role = 'TELLER') =>
+  tokenService.signAccessToken({ id: 'u', username: 'u', role, tenant_id: tenantId }, null, permissions);
+const get = (path, tenantId = T, perms, role) =>
+  fetch(`${baseUrl}${path}`, { headers: { Authorization: `Bearer ${token(tenantId, perms, role)}` } });
 
 const sell = async (name, idImage) => {
   await orders.processInstallmentSale(T, user, {
@@ -101,7 +103,7 @@ it('the photo can be fetched through the authenticated endpoint', async () => {
 it('the endpoint needs a token, the installment permission and the right shop', async () => {
   const plan = await sell('Private One', PNG);
   assert.equal((await fetch(`${baseUrl}/${plan.id}/customer-id-image`)).status, 401);
-  assert.equal((await get(`/${plan.id}/customer-id-image`, T, ['inventory:manage'])).status, 403);
+  assert.equal((await get(`/${plan.id}/customer-id-image`, T, ['inventory:manage'], 'NO_SUCH_ROLE')).status, 403);
   assert.equal((await get(`/${plan.id}/customer-id-image`, OTHER)).status, 404);
 });
 
