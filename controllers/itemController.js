@@ -68,6 +68,20 @@ const updateItem = async (req, res) => {
     const item = await productService.getById(tenantId, req.params.id);
     if (!item) return res.status(404).json({ error: 'Item not found' });
 
+    // Return stock only changes through returns and the release endpoint. A free edit let staff
+    // raise the floor without lowering return stock, cloning returned units into sellable stock.
+    const sentReturnQty = req.body.returnQuantity ?? req.body.return_quantity;
+    if (
+      sentReturnQty !== undefined &&
+      sentReturnQty !== null &&
+      sentReturnQty !== '' &&
+      Number(sentReturnQty) !== Number(item.return_quantity ?? 0)
+    ) {
+      return res.status(400).json({
+        error: 'Return stock cannot be edited here. Use "Release to sellable stock" to move units back.',
+      });
+    }
+
     const sellingPrice = req.body.sellingPrice ?? item.selling_price;
     let imagePath = item.image_path;
     if (req.body.image) {
@@ -86,7 +100,6 @@ const updateItem = async (req, res) => {
       buyingPrice: req.body.buyingPrice ?? item.buying_price,
       sellingPrice,
       quantity: req.body.quantity ?? item.quantity,
-      returnQuantity: req.body.returnQuantity ?? req.body.return_quantity ?? item.return_quantity ?? 0,
       category: req.body.category ?? item.category,
       categoryId: req.body.categoryId ?? item.category_id,
       imagePath,
@@ -94,6 +107,26 @@ const updateItem = async (req, res) => {
     res.json(updatedItem);
   } catch (error) {
     console.error('Update item error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
+const releaseReturns = async (req, res) => {
+  try {
+    const item = await productService.releaseReturnQuantity(
+      resolveTenantId(req),
+      req.params.id,
+      req.body.quantity
+    );
+    res.json(item);
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({
+        error: error.message,
+        ...(error.available !== undefined ? { available: error.available } : {}),
+      });
+    }
+    console.error('Release returns error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 };
@@ -139,6 +172,7 @@ module.exports = {
   getItemById,
   createItem,
   updateItem,
+  releaseReturns,
   deleteItem,
   searchItems,
   getItemsByCategory,
