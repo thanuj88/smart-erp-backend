@@ -10,13 +10,7 @@ const {
 } = require('../utils/staffUsername');
 const staffUserService = require('../services/staffUserService');
 const { withoutCredentialFields } = require('../utils/publicUser');
-
-const STAFF_ROLES = [
-  ROLES.MANAGER,
-  ROLES.TELLER,
-  ROLES.INVENTORY,
-  ROLES.ACCOUNTANT,
-];
+const { isStaffRole, STAFF_ROLE_ERROR } = require('../config/staffRoles');
 
 const getAllUsers = async (req, res) => {
   try {
@@ -42,12 +36,10 @@ const createUser = async (req, res) => {
       return res.status(400).json({ error: 'Email, password, and role are required' });
     }
 
-    const normalizedRole = normalizeRole(role);
-    if (!STAFF_ROLES.includes(normalizedRole)) {
-      return res.status(400).json({
-        error: 'Staff role must be MANAGER, TELLER, INVENTORY, or ACCOUNTANT',
-      });
+    if (!isStaffRole(role)) {
+      return res.status(400).json({ error: STAFF_ROLE_ERROR });
     }
+    const normalizedRole = normalizeRole(role);
 
     let finalUsername;
     let normalizedEmail;
@@ -102,11 +94,12 @@ const updateUser = async (req, res) => {
       return res.status(403).json({ error: 'Cannot modify users outside your organization' });
     }
 
-    if (role) {
-      const normalizedRole = normalizeRole(role);
-      if (normalizedRole === ROLES.SUPER_ADMIN || normalizedRole === ROLES.TENANT_ADMIN) {
-        return res.status(400).json({ error: 'Cannot assign admin roles via this endpoint' });
+    if (role !== undefined && role !== null && role !== '') {
+      // Same allowlist as create. Admin roles and any custom role name are refused.
+      if (!isStaffRole(role)) {
+        return res.status(400).json({ error: STAFF_ROLE_ERROR });
       }
+      const normalizedRole = normalizeRole(role);
       try {
         await staffUserService.assertStaffRoleChange(user.tenant_id, normalizedRole, user.role);
       } catch (quotaErr) {
@@ -143,7 +136,7 @@ const updateUser = async (req, res) => {
 
     const updated = await repo.updateStaffUser(userId, {
       username: finalUsername,
-      role: role ? normalizeRole(role) : undefined,
+      role: role !== undefined && role !== null && role !== '' ? normalizeRole(role) : undefined,
       fullName,
       branchId,
       pinHash,

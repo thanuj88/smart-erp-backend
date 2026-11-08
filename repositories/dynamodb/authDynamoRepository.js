@@ -774,7 +774,7 @@ class AuthDynamoRepository {
       email: nextEmail,
       role: role ?? user.role,
       full_name: fullName ?? user.full_name,
-      branch_id: branchId !== undefined ? branchId : user.branch_id,
+      branch_id: (branchId !== undefined ? branchId : user.branch_id) ?? null,
     };
     if (pinHash !== undefined) data.pin_hash = pinHash;
     await this.users.update(tenantId, id, data);
