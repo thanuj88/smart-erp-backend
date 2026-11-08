@@ -49,10 +49,21 @@ function createLookupLimiters({ perMinute = 30, perHour = 300 } = {}) {
 
 const customerLookupLimiters = createLookupLimiters();
 
+// A browser refreshes about once per 15 minutes. 60 per IP leaves room for a whole shop behind one
+// address while stopping a loop that guesses or replays refresh tokens.
+const refreshLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many refresh attempts. Please sign in again later.' },
+});
+
 module.exports = {
   loginLimiter,
   registerLimiter,
   passwordResetLimiter,
+  refreshLimiter,
   createLookupLimiters,
   customerLookupLimiters,
 };

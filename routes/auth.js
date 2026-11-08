@@ -8,6 +8,7 @@ const {
   loginLimiter,
   registerLimiter,
   passwordResetLimiter,
+  refreshLimiter,
 } = require('../middleware/rateLimit');
 
 router.post(
@@ -44,7 +45,7 @@ router.post(
   authController.loginPin
 );
 
-router.post('/refresh', authController.refresh);
+router.post('/refresh', refreshLimiter, authController.refresh);
 
 router.post('/logout', authenticate, authController.logout);
 

@@ -20,6 +20,8 @@ before(async () => {
   customerService = require('../services/customerService');
   tokenService = require('../services/tokenService');
   const customerRoutes = require('../routes/customers');
+  // authenticate reloads permissions from RBAC, so the role table has to exist.
+  await require('../services/permissionService').ensureSeeded();
 
   await customerService.create(TENANT, {
     name: 'Ada Perera',
@@ -51,8 +53,8 @@ const it = (name, fn) =>
     return fn(t);
   });
 
-const tokenFor = (id, permissions) =>
-  tokenService.signAccessToken({ id, username: id, role: 'TELLER', tenant_id: TENANT }, null, permissions);
+const tokenFor = (id, permissions, role = 'TELLER') =>
+  tokenService.signAccessToken({ id, username: id, role, tenant_id: TENANT }, null, permissions);
 
 const lookup = (token, phone = PHONE) =>
   fetch(`${baseUrl}/lookup?phone=${encodeURIComponent(phone)}`, {
@@ -91,7 +93,7 @@ it('lookups are rate limited per user, and one user does not slow another', asyn
 
 it('the full customer record is still there for people allowed to manage customers', async () => {
   const res = await fetch(`${baseUrl}/search?q=Ada`, {
-    headers: { Authorization: `Bearer ${tokenFor('manager', ['reports:view'])}` },
+    headers: { Authorization: `Bearer ${tokenFor('manager', ['reports:view'], 'MANAGER')}` },
   });
   assert.equal(res.status, 200);
   const [customer] = await res.json();
