@@ -10,6 +10,7 @@ const {
 } = require('../utils/staffUsername');
 const staffUserService = require('../services/staffUserService');
 const { withoutCredentialFields } = require('../utils/publicUser');
+const { pinProblem } = require('../utils/pin');
 const { isStaffRole, STAFF_ROLE_ERROR } = require('../config/staffRoles');
 
 const getAllUsers = async (req, res) => {
@@ -56,6 +57,13 @@ const createUser = async (req, res) => {
     }
     const normalizedRole = normalizeRole(role);
 
+    if (pin) {
+      const pinError = pinProblem(pin);
+      if (pinError) {
+        return res.status(400).json({ error: pinError });
+      }
+    }
+
     let finalUsername;
     let normalizedEmail;
     try {
@@ -70,10 +78,7 @@ const createUser = async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, authConfig.bcryptRounds);
-    let pinHash = null;
-    if (pin) {
-      pinHash = await tokenService.hashPin(pin);
-    }
+    const pinHash = pin ? await tokenService.hashPin(pin) : null;
 
     const newUser = await repo.createStaffUser({
       tenantId,
@@ -124,6 +129,12 @@ const updateUser = async (req, res) => {
 
     let pinHash;
     if (pin !== undefined) {
+      if (pin) {
+        const pinError = pinProblem(pin);
+        if (pinError) {
+          return res.status(400).json({ error: pinError });
+        }
+      }
       pinHash = pin ? await tokenService.hashPin(pin) : null;
     }
 
