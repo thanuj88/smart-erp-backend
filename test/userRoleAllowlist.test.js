@@ -21,6 +21,8 @@ before(async () => {
   authRepo = require('../repositories/dynamodb/authDynamoRepository');
   tokenService = require('../services/tokenService');
   const userRoutes = require('../routes/users');
+  // authenticate reloads permissions from RBAC, so the role table has to exist.
+  await require('../services/permissionService').ensureSeeded();
 
   await authRepo.users.put(TENANT, 'staff1', {
     tenant_id: TENANT,
