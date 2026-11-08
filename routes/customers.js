@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth');
 const requirePermission = require('../middleware/requirePermission');
+const { customerLookupLimiters } = require('../middleware/rateLimit');
 const { PERMISSIONS } = require('../config/permissions');
 const {
   getAllCustomers,
@@ -31,7 +32,7 @@ const canManage = requirePermission(PERMISSIONS.USERS_MANAGE, PERMISSIONS.PLATFO
 
 router.get('/', canView, getAllCustomers);
 router.get('/search', canView, searchCustomers);
-router.get('/lookup', canLookup, lookupCustomerByPhone);
+router.get('/lookup', canLookup, ...customerLookupLimiters, lookupCustomerByPhone);
 router.post('/', canManage, createCustomer);
 router.get('/:id', canView, getCustomerById);
 router.put('/:id', canManage, updateCustomer);

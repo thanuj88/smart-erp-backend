@@ -24,4 +24,35 @@ const passwordResetLimiter = rateLimit({
   message: { error: 'Too many password reset requests. Please try again later.' },
 });
 
-module.exports = { loginLimiter, registerLimiter, passwordResetLimiter };
+// Per signed-in user, not per IP: a till sits behind one shop IP, a scraper has one login.
+function userKey(req) {
+  return `${req.user?.tenantId ?? 'none'}:${req.user?.id ?? 'anon'}`;
+}
+
+/**
+ * POS member lookup. The 300 ms debounce means a teller fires a lookup per pause while typing,
+ * so the per-minute cap is generous. The hourly cap is what stops someone walking phone numbers.
+ */
+function createLookupLimiters({ perMinute = 30, perHour = 300 } = {}) {
+  const base = {
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: userKey,
+    validate: { keyGeneratorIpFallback: false },
+    message: { error: 'Too many customer lookups. Please slow down and try again shortly.' },
+  };
+  return [
+    rateLimit({ ...base, windowMs: 60 * 1000, limit: perMinute }),
+    rateLimit({ ...base, windowMs: 60 * 60 * 1000, limit: perHour }),
+  ];
+}
+
+const customerLookupLimiters = createLookupLimiters();
+
+module.exports = {
+  loginLimiter,
+  registerLimiter,
+  passwordResetLimiter,
+  createLookupLimiters,
+  customerLookupLimiters,
+};
