@@ -408,9 +408,13 @@ const logout = async (req, res) => {
 
 const forgotPassword = async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, captchaToken } = req.body;
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
+    }
+
+    if (!(await verifyCaptcha(captchaToken))) {
+      return res.status(400).json({ error: 'CAPTCHA verification failed' });
     }
 
     const user = await getAuthRepository().findUserByUsernameOrEmail(email);
