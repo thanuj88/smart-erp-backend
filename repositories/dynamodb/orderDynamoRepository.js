@@ -961,7 +961,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
    * ledger rows. Each sale line only moves if returned_qty is still what we read, so the same
    * unit cannot be returned twice and a failure leaves nothing half-applied.
    */
-  async processReturn(tenantId, user, { orderNumber, lines, reason, returnType }) {
+  async processReturn(tenantId, user, { orderNumber, lines, reason, returnType, approval }) {
     const order = await this.getOrderByNumber(tenantId, orderNumber);
     if (!order) {
       throw Object.assign(new Error('Order not found'), { status: 404 });
@@ -1072,6 +1072,10 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       payment_type: order.payment_type,
       return_type: type,
       reason: reason ? String(reason).trim() : null,
+      approved_by: approval?.approvedBy ? String(approval.approvedBy) : null,
+      approver_name: approval?.approverName ? String(approval.approverName) : null,
+      warranty_months: approval?.warrantyMonths === 12 || approval?.warrantyMonths === 24 ? approval.warrantyMonths : null,
+      sales_receipt_id: approval?.salesReceiptId ? String(approval.salesReceiptId).trim() : null,
       refund_cash: refundCash,
       refund_value: refundValue,
       replacement_qty: type === 'warranty' ? returnLines.reduce((sum, line) => sum + line.qty, 0) : 0,

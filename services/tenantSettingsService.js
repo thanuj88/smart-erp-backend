@@ -12,6 +12,10 @@ const {
 const { DEFAULT_COUNTRY_CODE, getCountry } = require('../utils/phone');
 const { DEFAULT_RECEIPT, normalizeReceipt, mergeReceipt, saveReceiptLogo } = require('../config/receipt');
 const { normalizeDiscountLimits } = require('../utils/discountPolicy');
+const {
+  normalizeRefundWindowDays,
+  normalizeCashRefundApprovalThreshold,
+} = require('../utils/refundPolicy');
 
 const SETTINGS_SK = 'SETTINGS';
 
@@ -80,6 +84,10 @@ function normalizeSettings(item, tenantMeta) {
     receiptFooter: receipt.footer,
     dashboardWidgets: normalizeDashboardWidgets(item?.dashboard_widgets || item?.dashboardWidgets),
     discountLimits: normalizeDiscountLimits(item?.discount_limits || item?.discountLimits),
+    refundWindowDays: normalizeRefundWindowDays(item?.refund_window_days ?? item?.refundWindowDays),
+    cashRefundApprovalThreshold: normalizeCashRefundApprovalThreshold(
+      item?.cash_refund_approval_threshold ?? item?.cashRefundApprovalThreshold
+    ),
     currency: { code: preset.code, symbol },
   };
 }
@@ -146,6 +154,13 @@ async function updateForTenant(tenantId, payload) {
     ? normalizeDiscountLimits(payload.discountLimits, current.discountLimits)
     : normalizeDiscountLimits(current.discountLimits);
 
+  const refundWindowDays = payload.refundWindowDays != null
+    ? normalizeRefundWindowDays(payload.refundWindowDays)
+    : current.refundWindowDays;
+  const cashRefundApprovalThreshold = payload.cashRefundApprovalThreshold != null
+    ? normalizeCashRefundApprovalThreshold(payload.cashRefundApprovalThreshold)
+    : current.cashRefundApprovalThreshold;
+
   const receipt = mergeReceipt(current.receipt || DEFAULT_RECEIPT, payload);
   if (payload.removeReceiptLogo) {
     receipt.logo = null;
@@ -171,6 +186,8 @@ async function updateForTenant(tenantId, payload) {
     receipt_footer: receipt.footer,
     dashboard_widgets: dashboardWidgets,
     discount_limits: discountLimits,
+    refund_window_days: refundWindowDays,
+    cash_refund_approval_threshold: cashRefundApprovalThreshold,
     updatedAt: new Date().toISOString(),
   };
 
