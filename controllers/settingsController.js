@@ -45,6 +45,8 @@ const updateSettings = async (req, res) => {
       removeReceiptLogo: req.body.removeReceiptLogo,
       dashboardWidgets: req.body.dashboardWidgets,
       discountLimits: req.body.discountLimits,
+      refundWindowDays: req.body.refundWindowDays,
+      cashRefundApprovalThreshold: req.body.cashRefundApprovalThreshold,
     });
 
     res.json(settings);

@@ -6,6 +6,8 @@ const { validateDistinctCustomerAndWitness, validateNicNumbers, normalizeNic } =
 const { parseInstallmentLines } = require('../utils/installmentLines');
 const { parseCashSaleBody } = require('../utils/cashSaleLines');
 const { buildDiscountReport } = require('../utils/discountPolicy');
+const { buildRefundReport } = require('../utils/refundPolicy');
+const { authorizeReturn } = require('../services/refundApprovalService');
 
 const handleSaleError = (res, error) => {
   if (error.status) {
@@ -269,17 +271,47 @@ const listReturns = async (req, res) => {
   }
 };
 
+const getRefundReport = async (req, res) => {
+  try {
+    const returns = await orderService.listReturns(resolveTenantId(req));
+    const report = buildRefundReport(returns, { from: req.query.from, to: req.query.to });
+    if (report.error) return res.status(400).json({ error: report.error });
+    res.json(report);
+  } catch (error) {
+    console.error('Refund report error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
 const processReturn = async (req, res) => {
   try {
-    const { orderNumber, lines, reason, returnType } = req.body;
+    const { orderNumber, lines, reason, returnType, managerPin, salesReceiptId, warrantyMonths } = req.body;
     if (!orderNumber || !Array.isArray(lines) || !lines.length) {
       return res.status(400).json({ error: 'orderNumber and at least one return line are required' });
     }
-    const result = await orderService.processReturn(resolveTenantId(req), req.user, {
+    const tenantId = resolveTenantId(req);
+    const decision = await authorizeReturn({
+      tenantId,
+      user: req.user,
       orderNumber,
       lines,
       reason,
       returnType,
+      managerPin,
+      salesReceiptId,
+      warrantyMonths,
+    });
+    const result = await orderService.processReturn(tenantId, req.user, {
+      orderNumber,
+      lines,
+      reason: decision.reason,
+      returnType: decision.returnType,
+      approval: {
+        approvedBy: decision.approverId,
+        approverName: decision.approverName,
+        warrantyMonths: decision.warrantyMonths,
+        salesReceiptId: decision.salesReceiptId,
+      },
     });
     res.status(201).json(result);
   } catch (error) {
@@ -305,5 +337,6 @@ module.exports = {
   getSalesTrend,
   getOrderByNumber,
   listReturns,
+  getRefundReport,
   processReturn,
 };

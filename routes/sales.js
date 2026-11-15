@@ -52,14 +52,21 @@ router.post('/installment', [
 
 router.get('/orders/:orderNumber', requireTeller, saleController.getOrderByNumber);
 router.get('/returns', requireReportsAccess, saleController.listReturns);
+router.get('/refunds', requireReportsAccess, saleController.getRefundReport);
 router.post(
   '/returns',
   [
     requireTeller,
     body('orderNumber').isString().notEmpty(),
     body('lines').isArray({ min: 1 }),
-    body('reason').optional({ nullable: true }).isString(),
+    body('reason').optional({ nullable: true }).isString().isLength({ max: 500 }),
     body('returnType').optional().isIn(['cash', 'defect', 'warranty']),
+    body('managerPin').optional({ nullable: true }).isString().isLength({ max: 8 }),
+    body('salesReceiptId').optional({ nullable: true }).isString().isLength({ max: 40 }),
+    body('warrantyMonths')
+      .optional({ nullable: true })
+      .custom((value) => value === 12 || value === 24 || value === '12' || value === '24')
+      .withMessage('Warranty period must be 12 or 24 months'),
   ],
   validate,
   saleController.processReturn
