@@ -27,6 +27,10 @@ class OrderService {
     return this.repo.getByDateRange(tenantId, startDate, endDate);
   }
 
+  getMine(tenantId, tellerId, range) {
+    return this.repo.getMine(tenantId, tellerId, range);
+  }
+
   processCashSale(tenantId, user, payload) {
     return this.repo.processCashSale(tenantId, user, payload);
   }

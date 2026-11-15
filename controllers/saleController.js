@@ -1,6 +1,7 @@
 const orderService = require('../services/orderService');
 const customerService = require('../services/customerService');
 const { resolveTenantId } = require('../utils/tenant');
+const { parseMineRange } = require('../utils/tellerSales');
 const { validateDistinctCustomerAndWitness, validateNicNumbers, normalizeNic } = require('../utils/installmentValidation');
 const { parseInstallmentLines } = require('../utils/installmentLines');
 const { parseCashSaleBody } = require('../utils/cashSaleLines');
@@ -136,6 +137,17 @@ const getRecentSales = async (req, res) => {
   }
 };
 
+const getMySales = async (req, res) => {
+  try {
+    const range = parseMineRange(req.query.from, req.query.to);
+    if (!range.ok) return res.status(400).json({ error: range.error });
+    const sales = await orderService.getMine(resolveTenantId(req), req.user.id, range);
+    res.json(sales);
+  } catch (error) {
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
 const getSalesByDateRange = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
@@ -265,6 +277,7 @@ module.exports = {
   getAllSales,
   getTodaySales,
   getRecentSales,
+  getMySales,
   getSalesByDateRange,
   getDailySummary,
   getWeeklySummary,

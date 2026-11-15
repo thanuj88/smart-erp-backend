@@ -168,3 +168,18 @@ it('CAPTCHA_AFTER_FAILURES moves the threshold', async () => {
   assert.equal((await first.json()).captchaRequired, true);
   assert.equal((await post('/login', { email, password: 'RightPass123' })).status, 400);
 });
+
+it('mobile clients get a stable CAPTCHA_REQUIRED code and are never bypassed', async () => {
+  const { email, id } = await makeUser();
+  for (let i = 0; i < 3; i += 1) await post('/login', { email, password: 'wrong' });
+  const res = await fetch(baseUrl + '/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Client': 'mobile' },
+    body: JSON.stringify({ email, password: 'RightPass123' }),
+  });
+  assert.equal(res.status, 400);
+  const body = await res.json();
+  assert.equal(body.captchaRequired, true);
+  assert.equal(body.code, 'CAPTCHA_REQUIRED');
+  assert.equal(await attempts(id), 3);
+});

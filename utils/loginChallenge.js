@@ -23,9 +23,18 @@ function needsCaptcha(failedAttempts, env = process.env) {
  * Returns null when sign-in may continue, or the 400 body to send when a CAPTCHA is needed.
  * Called before the password or PIN is checked, so a bot cannot keep guessing past the threshold.
  */
-async function loginChallengeFailure(user, captchaToken, env = process.env) {
+async function loginChallengeFailure(user, captchaToken, env = process.env, options = {}) {
   if (!needsCaptcha(user?.failed_login_attempts, env)) return null;
   if (!captchaToken) {
+    // Mobile clients cannot obtain a web reCAPTCHA token yet: return a clear, stable code and message.
+    // The challenge is never bypassed.
+    if (options.mobile) {
+      return {
+        error: 'Too many failed attempts. Verification is required: sign in once on the web app or ask your manager.',
+        captchaRequired: true,
+        code: 'CAPTCHA_REQUIRED',
+      };
+    }
     return { error: 'Please complete the CAPTCHA to continue.', captchaRequired: true };
   }
   if (!(await verifyCaptcha(captchaToken))) {
@@ -34,4 +43,9 @@ async function loginChallengeFailure(user, captchaToken, env = process.env) {
   return null;
 }
 
-module.exports = { failuresBeforeCaptcha, isLoginCaptchaEnabled, needsCaptcha, loginChallengeFailure };
+/** True when the request comes from the native app (`X-Client: mobile`). */
+function isMobileClient(req) {
+  return String(req?.headers?.['x-client'] || '').toLowerCase() === 'mobile';
+}
+
+module.exports = { failuresBeforeCaptcha, isLoginCaptchaEnabled, needsCaptcha, loginChallengeFailure, isMobileClient };

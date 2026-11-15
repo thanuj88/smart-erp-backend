@@ -16,6 +16,7 @@ const { resolveOrderNumber, normalizeOrderNumber } = require('../../utils/orderI
 const { savePrivateWitnessImage, resolveWitnessImageFile } = require('../../utils/privateUpload');
 const { MAX_INSTALLMENT_LINES, mergeInstallmentLines } = require('../../utils/installmentLines');
 const { priceBill, bookedUnitPrice, saleChargeFields, readChargeInput, roundMoney } = require('../../utils/salePricing');
+const { filterTellerSales } = require('../../utils/tellerSales');
 
 const RETURN_TYPES = ['cash', 'defect', 'warranty'];
 // DynamoDB deletes the marker after this. While the item still exists, a repeat key replays the sale.
@@ -189,6 +190,12 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       const d = new Date(s.sale_date);
       return d >= start && d <= end;
     });
+  }
+
+  /** This teller's rows only. Store-wide lists stay on the reports endpoints. */
+  async getMine(tenantId, tellerId, range) {
+    const all = await this.getAll(tenantId);
+    return filterTellerSales(all, tellerId, range);
   }
 
   _idempotencyKeys(tenantId, idempotencyKey) {

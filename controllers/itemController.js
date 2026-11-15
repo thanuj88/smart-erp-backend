@@ -1,6 +1,15 @@
 const productService = require('../services/productService');
 const { resolveTenantId } = require('../utils/tenant');
 const { saveImage } = require('../utils/saveImage');
+const { barcodeForCreate, barcodeForUpdate, parseSymbology } = require('../utils/barcode');
+
+function rejectBarcode(res, error) {
+  if (error && error.status) {
+    res.status(error.status).json({ error: error.message });
+    return true;
+  }
+  return false;
+}
 
 const getAllItems = async (req, res) => {
   try {
@@ -33,11 +42,39 @@ const getItemById = async (req, res) => {
   }
 };
 
+const getItemByBarcode = async (req, res) => {
+  try {
+    const code = String(req.params.code || req.query.code || '').trim();
+    if (!code) return res.status(400).json({ error: 'Barcode is required' });
+    if (code.length > 64) return res.status(400).json({ error: 'Barcode must be 64 characters or fewer' });
+    const matches = await productService.getByBarcode(
+      resolveTenantId(req),
+      code,
+      parseSymbology(req.query.type)
+    );
+    if (matches.length === 0) return res.status(404).json({ error: 'No product uses this barcode' });
+    if (matches.length > 1) {
+      return res.status(409).json({ error: 'More than one product uses this barcode', matches });
+    }
+    res.json(matches[0]);
+  } catch (error) {
+    console.error('Barcode lookup error:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+};
+
 const createItem = async (req, res) => {
   try {
     const { name, description, buyingPrice, sellingPrice, quantity, category, categoryId } = req.body;
     if (!name || sellingPrice === undefined || quantity === undefined) {
       return res.status(400).json({ error: 'Name, selling price, and quantity are required' });
+    }
+    let barcode = '';
+    try {
+      barcode = barcodeForCreate(req.body);
+    } catch (error) {
+      if (rejectBarcode(res, error)) return;
+      throw error;
     }
     const newItem = await productService.create(resolveTenantId(req), {
       name,
@@ -47,6 +84,7 @@ const createItem = async (req, res) => {
       quantity,
       category,
       categoryId,
+      barcode,
       imagePath: req.body.image
         ? saveImage(
             req.body.image,
@@ -94,6 +132,14 @@ const updateItem = async (req, res) => {
       imagePath = null;
     }
 
+    let barcode;
+    try {
+      barcode = barcodeForUpdate(req.body);
+    } catch (error) {
+      if (rejectBarcode(res, error)) return;
+      throw error;
+    }
+
     const updatedItem = await productService.update(tenantId, req.params.id, {
       name: req.body.name ?? item.name,
       description: req.body.description ?? item.description,
@@ -103,6 +149,7 @@ const updateItem = async (req, res) => {
       category: req.body.category ?? item.category,
       categoryId: req.body.categoryId ?? item.category_id,
       imagePath,
+      ...(barcode !== undefined ? { barcode } : {}),
     });
     res.json(updatedItem);
   } catch (error) {
@@ -169,6 +216,7 @@ const getItemsByCategory = async (req, res) => {
 module.exports = {
   getAllItems,
   getAvailableItems,
+  getItemByBarcode,
   getItemById,
   createItem,
   updateItem,
