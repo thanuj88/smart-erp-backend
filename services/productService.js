@@ -25,6 +25,10 @@ class ProductService {
     return this.repo.search(tenantId, term);
   }
 
+  getByBarcode(tenantId, code, symbology) {
+    return this.repo.getByBarcode(tenantId, code, symbology);
+  }
+
   create(tenantId, data) {
     return this.repo.create(tenantId, data);
   }

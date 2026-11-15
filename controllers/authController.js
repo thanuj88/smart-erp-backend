@@ -8,7 +8,7 @@ const { logAuthEvent } = require('../services/auditService');
 const tokenService = require('../services/tokenService');
 const { verifyCaptcha } = require('../utils/captcha');
 const mailer = require('../services/mailer');
-const { loginChallengeFailure, needsCaptcha } = require('../utils/loginChallenge');
+const { loginChallengeFailure, needsCaptcha, isMobileClient } = require('../utils/loginChallenge');
 const { phoneValidationMessage, toE164, getCountry } = require('../utils/phone');
 
 function clientMeta(req) {
@@ -236,7 +236,7 @@ const login = async (req, res) => {
       return res.status(403).json({ error: blockReason });
     }
 
-    const challenge = await loginChallengeFailure(user, captchaToken);
+    const challenge = await loginChallengeFailure(user, captchaToken, process.env, { mobile: isMobileClient(req) });
     if (challenge) {
       return res.status(400).json(challenge);
     }
@@ -301,7 +301,7 @@ const loginPin = async (req, res) => {
       return res.status(403).json({ error: blockReason });
     }
 
-    const challenge = await loginChallengeFailure(user, captchaToken);
+    const challenge = await loginChallengeFailure(user, captchaToken, process.env, { mobile: isMobileClient(req) });
     if (challenge) {
       return res.status(400).json(challenge);
     }

@@ -70,6 +70,9 @@ router.get('/top', requireReportsAccess, saleController.getTopProducts);
 router.get('/today', requireReportsAccess, saleController.getTodaySales);
 router.get('/recent', requireReportsAccess, saleController.getRecentSales);
 
+// G4: the signed-in teller's own rows. redactCost (above) strips cost and profit.
+router.get('/mine', requireTeller, saleController.getMySales);
+
 // Generic timeframe summary (store-wide totals, so reports access)
 router.get('/summary', requireReportsAccess, saleController.getSummaryByRange);
 

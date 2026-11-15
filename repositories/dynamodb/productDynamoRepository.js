@@ -2,6 +2,8 @@ const { UpdateCommand } = require('@aws-sdk/lib-dynamodb');
 const BaseDynamoRepository = require('./baseDynamoRepository');
 const ENTITY = require('../entityTypes');
 const categoryDynamoRepository = require('./categoryDynamoRepository');
+const { findByBarcode } = require('../../utils/barcode');
+const { sellingPrice, mergeProductUpdate } = require('../../utils/productWrite');
 
 class ProductDynamoRepository extends BaseDynamoRepository {
   constructor() {
@@ -58,24 +60,21 @@ class ProductDynamoRepository extends BaseDynamoRepository {
     return Promise.all(items.map((p) => this.enrichWithCategory(tenantId, p)));
   }
 
-  _sellingPrice(data, existing) {
-    const raw =
-      data.sellingPrice ??
-      data.selling_price ??
-      existing?.selling_price ??
-      existing?.price;
-    return raw != null && raw !== '' ? Number(raw) : 0;
+  async getByBarcode(tenantId, code, symbology) {
+    const items = await this.queryByTenant(tenantId);
+    const matches = findByBarcode(items, code, symbology);
+    return Promise.all(matches.map((p) => this.enrichWithCategory(tenantId, p)));
   }
 
   async create(tenantId, data) {
     const id = data.id || `${Date.now()}${Math.floor(Math.random() * 1000)}`;
-    const sellingPrice = this._sellingPrice(data);
+    const price = sellingPrice(data);
     const record = {
       name: data.name,
       description: data.description || '',
       buying_price: data.buyingPrice ?? data.buying_price ?? 0,
-      selling_price: sellingPrice,
-      price: sellingPrice,
+      selling_price: price,
+      price,
       quantity: data.quantity,
       return_quantity: Number(data.returnQuantity ?? data.return_quantity ?? 0) || 0,
       barcode: data.barcode || '',
@@ -94,23 +93,10 @@ class ProductDynamoRepository extends BaseDynamoRepository {
   async update(tenantId, id, data) {
     const existing = await super.getById(tenantId, id);
     if (!existing) return null;
-    const sellingPrice = this._sellingPrice(data, existing);
-    const merged = {
-      name: data.name ?? existing.name,
-      description: data.description ?? existing.description,
-      buying_price: data.buyingPrice ?? data.buying_price ?? existing.buying_price,
-      selling_price: sellingPrice,
-      price: sellingPrice,
-      quantity: data.quantity ?? existing.quantity,
-      // return_quantity is deliberately not written here. Returns add to it and
-      // releaseReturnQuantity moves units out of it, each as one atomic update.
-      category: data.category ?? existing.category,
-      category_id: data.categoryId ?? data.category_id ?? existing.category_id,
-    };
-    if (data.imagePath !== undefined || data.image_path !== undefined) {
-      merged.image_path = data.imagePath ?? data.image_path ?? null;
-    }
-    await super.update(tenantId, id, merged);
+    // return_quantity is deliberately not written here. Returns add to it and
+    // releaseReturnQuantity moves units out of it, each as one atomic update.
+    // barcode is written only when the client sent it.
+    await super.update(tenantId, id, mergeProductUpdate(existing, data));
     return this.getById(tenantId, id);
   }
 

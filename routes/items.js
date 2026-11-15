@@ -23,6 +23,10 @@ router.get('/search', itemController.searchItems);
 // Get items by category
 router.get('/category/:categoryId', itemController.getItemsByCategory);
 
+// Exact barcode match. Registered before `/:id` so "barcode" is not read as a product id.
+// `?type=` is the scanner symbology (ean13, ean8, upc_a, upc_e, code128) and is optional.
+router.get('/barcode/:code', itemController.getItemByBarcode);
+
 // Get item by ID
 router.get('/:id', itemController.getItemById);
 
