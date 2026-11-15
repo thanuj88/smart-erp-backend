@@ -44,6 +44,7 @@ const updateSettings = async (req, res) => {
       receipt: req.body.receipt,
       removeReceiptLogo: req.body.removeReceiptLogo,
       dashboardWidgets: req.body.dashboardWidgets,
+      discountLimits: req.body.discountLimits,
     });
 
     res.json(settings);

@@ -174,6 +174,7 @@ function saleChargeFields(line, bill) {
 module.exports = {
   roundMoney,
   readChargeInput,
+  computeCharges,
   priceBill,
   bookedUnitPrice,
   saleChargeFields,

@@ -11,6 +11,7 @@ const {
 } = require('../config/currency');
 const { DEFAULT_COUNTRY_CODE, getCountry } = require('../utils/phone');
 const { DEFAULT_RECEIPT, normalizeReceipt, mergeReceipt, saveReceiptLogo } = require('../config/receipt');
+const { normalizeDiscountLimits } = require('../utils/discountPolicy');
 
 const SETTINGS_SK = 'SETTINGS';
 
@@ -78,6 +79,7 @@ function normalizeSettings(item, tenantMeta) {
     receipt,
     receiptFooter: receipt.footer,
     dashboardWidgets: normalizeDashboardWidgets(item?.dashboard_widgets || item?.dashboardWidgets),
+    discountLimits: normalizeDiscountLimits(item?.discount_limits || item?.discountLimits),
     currency: { code: preset.code, symbol },
   };
 }
@@ -140,6 +142,10 @@ async function updateForTenant(tenantId, payload) {
       ? normalizeDashboardWidgets(payload.dashboardWidgets)
       : current.dashboardWidgets;
 
+  const discountLimits = payload.discountLimits != null
+    ? normalizeDiscountLimits(payload.discountLimits, current.discountLimits)
+    : normalizeDiscountLimits(current.discountLimits);
+
   const receipt = mergeReceipt(current.receipt || DEFAULT_RECEIPT, payload);
   if (payload.removeReceiptLogo) {
     receipt.logo = null;
@@ -164,6 +170,7 @@ async function updateForTenant(tenantId, payload) {
     receipt,
     receipt_footer: receipt.footer,
     dashboard_widgets: dashboardWidgets,
+    discount_limits: discountLimits,
     updatedAt: new Date().toISOString(),
   };
 
