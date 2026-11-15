@@ -25,7 +25,8 @@ router.post('/cash', [
   body('shipping').optional({ nullable: true }).isFloat({ min: 0 }),
   body('shippingPercent').optional({ nullable: true }).isFloat({ min: 0, max: 100 }),
   body('discount').optional({ nullable: true }).isFloat({ min: 0 }),
-  body('discountPercent').optional({ nullable: true }).isFloat({ min: 0, max: 100 }),
+  body('discountPercent').optional({ nullable: true }).isFloat({ min: 0, max: 5 }).withMessage('Discount percent cannot exceed 5'),
+  body('discountReason').optional({ nullable: true }).isString().isLength({ max: 200 }).withMessage('Discount reason must be 200 characters or less'),
 ], validate, saleController.processCashSale);
 
 // Process an installment sale (Teller and Admin)
@@ -45,7 +46,8 @@ router.post('/installment', [
   body('shipping').optional({ nullable: true }).isFloat({ min: 0 }),
   body('shippingPercent').optional({ nullable: true }).isFloat({ min: 0, max: 100 }),
   body('discount').optional({ nullable: true }).isFloat({ min: 0 }),
-  body('discountPercent').optional({ nullable: true }).isFloat({ min: 0, max: 100 }),
+  body('discountPercent').optional({ nullable: true }).isFloat({ min: 0, max: 5 }).withMessage('Discount percent cannot exceed 5'),
+  body('discountReason').optional({ nullable: true }).isString().isLength({ max: 200 }).withMessage('Discount reason must be 200 characters or less'),
 ], validate, saleController.processInstallmentSale);
 
 router.get('/orders/:orderNumber', requireTeller, saleController.getOrderByNumber);
@@ -72,6 +74,9 @@ router.get('/recent', requireReportsAccess, saleController.getRecentSales);
 
 // G4: the signed-in teller's own rows. redactCost (above) strips cost and profit.
 router.get('/mine', requireTeller, saleController.getMySales);
+
+// Discounts given, with the reason and the manager who approved anything above a role limit.
+router.get('/discounts', requireReportsAccess, saleController.getDiscountReport);
 
 // Generic timeframe summary (store-wide totals, so reports access)
 router.get('/summary', requireReportsAccess, saleController.getSummaryByRange);

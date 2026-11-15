@@ -16,6 +16,8 @@ const { resolveOrderNumber, normalizeOrderNumber } = require('../../utils/orderI
 const { savePrivateWitnessImage, resolveWitnessImageFile } = require('../../utils/privateUpload');
 const { MAX_INSTALLMENT_LINES, mergeInstallmentLines } = require('../../utils/installmentLines');
 const { priceBill, bookedUnitPrice, saleChargeFields, readChargeInput, roundMoney } = require('../../utils/salePricing');
+const { discountAuditFields } = require('../../utils/discountPolicy');
+const { authorizeSaleDiscount } = require('../../services/discountApprovalService');
 const { filterTellerSales } = require('../../utils/tellerSales');
 
 const RETURN_TYPES = ['cash', 'defect', 'warranty'];
@@ -279,7 +281,16 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       resolvedLines.push({ itemId: line.itemId, quantity: line.quantity, item });
     }
 
-    const priced = await this._priceLines(tenantId, resolvedLines, readChargeInput(chargeInput));
+    const chargeFields = readChargeInput(chargeInput);
+    const priced = await this._priceLines(tenantId, resolvedLines, chargeFields);
+    const discountDecision = await authorizeSaleDiscount({
+      tenantId,
+      user,
+      itemsTotal: priced.itemsTotal,
+      input: chargeFields,
+      managerPin: chargeInput.managerPin,
+      discountReason: chargeInput.discountReason,
+    });
 
     const saleDate = new Date().toISOString();
     const firstSaleId = `${Date.now()}${Math.floor(Math.random() * 1000)}`;
@@ -295,6 +306,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
         quantity,
         buying_price: item.buying_price,
         ...saleChargeFields(line, priced),
+        ...discountAuditFields(discountDecision),
         payment_type: 'cash',
         returned_qty: 0,
         ...this._categoryFromProduct(item),
@@ -458,7 +470,16 @@ class OrderDynamoRepository extends BaseDynamoRepository {
       });
     }
 
-    const priced = await this._priceLines(tenantId, resolvedLines, readChargeInput(payload));
+    const chargeFields = readChargeInput(payload);
+    const priced = await this._priceLines(tenantId, resolvedLines, chargeFields);
+    const discountDecision = await authorizeSaleDiscount({
+      tenantId,
+      user,
+      itemsTotal: priced.itemsTotal,
+      input: chargeFields,
+      managerPin: payload.managerPin,
+      discountReason: payload.discountReason,
+    });
     const totalAmount = priced.grandTotal;
     if (downPayment >= totalAmount) {
       throw Object.assign(new Error('Down payment must be less than total amount'), { status: 400 });
@@ -511,6 +532,7 @@ class OrderDynamoRepository extends BaseDynamoRepository {
         quantity: line.quantity,
         buying_price: line.item.buying_price,
         ...saleChargeFields(line, priced),
+        ...discountAuditFields(discountDecision),
         payment_type: 'installment',
         returned_qty: 0,
         ...this._categoryFromProduct(line.item),

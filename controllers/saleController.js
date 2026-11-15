@@ -5,6 +5,7 @@ const { parseMineRange } = require('../utils/tellerSales');
 const { validateDistinctCustomerAndWitness, validateNicNumbers, normalizeNic } = require('../utils/installmentValidation');
 const { parseInstallmentLines } = require('../utils/installmentLines');
 const { parseCashSaleBody } = require('../utils/cashSaleLines');
+const { buildDiscountReport } = require('../utils/discountPolicy');
 
 const handleSaleError = (res, error) => {
   if (error.status) {
@@ -36,6 +37,8 @@ const processCashSale = async (req, res) => {
       shippingPercent: req.body.shippingPercent,
       discount: req.body.discount,
       discountPercent: req.body.discountPercent,
+      discountReason: req.body.discountReason,
+      managerPin: req.body.managerPin,
     });
     res.status(sale.replayed ? 200 : 201).json(sale);
   } catch (error) {
@@ -90,11 +93,25 @@ const processInstallmentSale = async (req, res) => {
         shippingPercent: req.body.shippingPercent,
         discount: req.body.discount,
         discountPercent: req.body.discountPercent,
+        discountReason: req.body.discountReason,
+        managerPin: req.body.managerPin,
       }
     );
     res.status(201).json(result);
   } catch (error) {
     return handleSaleError(res, error);
+  }
+};
+
+const getDiscountReport = async (req, res) => {
+  try {
+    const sales = await orderService.getAll(resolveTenantId(req));
+    const report = buildDiscountReport(sales, { from: req.query.from, to: req.query.to });
+    if (report.error) return res.status(400).json({ error: report.error });
+    res.json(report);
+  } catch (error) {
+    console.error('Discount report error:', error);
+    res.status(500).json({ error: 'Server error' });
   }
 };
 
@@ -273,6 +290,7 @@ const processReturn = async (req, res) => {
 module.exports = {
   processCashSale,
   processInstallmentSale,
+  getDiscountReport,
   getTopProducts,
   getAllSales,
   getTodaySales,
