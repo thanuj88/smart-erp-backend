@@ -13,4 +13,5 @@ module.exports = {
   USER: 'USER',
   TENANT: 'TENANT',
   BRANCH: 'BRANCH',
+  ACTIVITY_LOG: 'ACTIVITY_LOG',
 };

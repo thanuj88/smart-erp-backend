@@ -9,6 +9,7 @@ const installmentSettingDynamo = require('./dynamodb/installmentSettingDynamoRep
 const authDynamo = require('./dynamodb/authDynamoRepository');
 const rbacDynamo = require('./dynamodb/rbacDynamoRepository');
 const platformDynamo = require('./dynamodb/platformDynamoRepository');
+const activityLogDynamo = require('./dynamodb/activityLogDynamoRepository');
 
 let authRepositoryInstance;
 
@@ -27,4 +28,5 @@ module.exports = {
   getInstallmentSettingRepository: () => installmentSettingDynamo,
   getRbacRepository: () => rbacDynamo,
   getPlatformRepository: () => platformDynamo,
+  getActivityLogRepository: () => activityLogDynamo,
 };

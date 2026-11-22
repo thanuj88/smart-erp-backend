@@ -1,5 +1,6 @@
 const productService = require('../services/productService');
 const { resolveTenantId } = require('../utils/tenant');
+const activityLog = require('../services/activityLogService');
 const { saveImage } = require('../utils/saveImage');
 const { barcodeForCreate, barcodeForUpdate, parseSymbology } = require('../utils/barcode');
 
@@ -93,6 +94,11 @@ const createItem = async (req, res) => {
           )
         : null,
     });
+    await activityLog.record(req, {
+      action: activityLog.ACTIONS.ITEM_CREATED,
+      targetId: newItem?.id,
+      targetLabel: newItem?.name || name,
+    });
     res.status(201).json(newItem);
   } catch (error) {
     console.error('Create item error:', error);
@@ -140,7 +146,7 @@ const updateItem = async (req, res) => {
       throw error;
     }
 
-    const updatedItem = await productService.update(tenantId, req.params.id, {
+    const next = {
       name: req.body.name ?? item.name,
       description: req.body.description ?? item.description,
       buyingPrice: req.body.buyingPrice ?? item.buying_price,
@@ -149,7 +155,26 @@ const updateItem = async (req, res) => {
       category: req.body.category ?? item.category,
       categoryId: req.body.categoryId ?? item.category_id,
       imagePath,
+    };
+    const updatedItem = await productService.update(tenantId, req.params.id, {
+      ...next,
       ...(barcode !== undefined ? { barcode } : {}),
+    });
+    await activityLog.record(req, {
+      action: activityLog.ACTIONS.ITEM_UPDATED,
+      targetId: item.id ?? req.params.id,
+      targetLabel: next.name,
+      detail: activityLog.changedNames([
+        { name: 'name', from: item.name, to: next.name },
+        { name: 'description', from: item.description, to: next.description },
+        { name: 'buyingPrice', from: item.buying_price, to: next.buyingPrice },
+        { name: 'sellingPrice', from: item.selling_price, to: next.sellingPrice },
+        { name: 'quantity', from: item.quantity, to: next.quantity },
+        { name: 'category', from: item.category, to: next.category },
+        { name: 'categoryId', from: item.category_id, to: next.categoryId },
+        { name: 'image', from: item.image_path, to: next.imagePath },
+        ...(barcode !== undefined ? [{ name: 'barcode', from: item.barcode, to: barcode }] : []),
+      ]),
     });
     res.json(updatedItem);
   } catch (error) {
@@ -184,6 +209,11 @@ const deleteItem = async (req, res) => {
     const item = await productService.getById(tenantId, req.params.id);
     if (!item) return res.status(404).json({ error: 'Item not found' });
     await productService.delete(tenantId, req.params.id);
+    await activityLog.record(req, {
+      action: activityLog.ACTIONS.ITEM_DELETED,
+      targetId: item.id ?? req.params.id,
+      targetLabel: item.name,
+    });
     res.json({ message: 'Item deleted successfully' });
   } catch (error) {
     console.error('Delete item error:', error);
