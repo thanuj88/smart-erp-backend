@@ -8,6 +8,7 @@ const { parseCashSaleBody } = require('../utils/cashSaleLines');
 const { buildDiscountReport } = require('../utils/discountPolicy');
 const { buildRefundReport } = require('../utils/refundPolicy');
 const { authorizeReturn } = require('../services/refundApprovalService');
+const activityLog = require('../services/activityLogService');
 
 const handleSaleError = (res, error) => {
   if (error.status) {
@@ -42,6 +43,14 @@ const processCashSale = async (req, res) => {
       discountReason: req.body.discountReason,
       managerPin: req.body.managerPin,
     });
+    if (!sale.replayed) {
+      await activityLog.record(req, {
+        action: activityLog.ACTIONS.ORDER_CREATED,
+        targetId: sale.order_number,
+        targetLabel: sale.order_number,
+        detail: 'cash',
+      });
+    }
     res.status(sale.replayed ? 200 : 201).json(sale);
   } catch (error) {
     return handleSaleError(res, error);
@@ -99,6 +108,13 @@ const processInstallmentSale = async (req, res) => {
         managerPin: req.body.managerPin,
       }
     );
+    const createdOrderNumber = result.order_number || result.sale?.order_number || result.sales?.[0]?.order_number || orderNumber;
+    await activityLog.record(req, {
+      action: activityLog.ACTIONS.ORDER_CREATED,
+      targetId: createdOrderNumber,
+      targetLabel: createdOrderNumber,
+      detail: 'installment',
+    });
     res.status(201).json(result);
   } catch (error) {
     return handleSaleError(res, error);
@@ -312,6 +328,12 @@ const processReturn = async (req, res) => {
         warrantyMonths: decision.warrantyMonths,
         salesReceiptId: decision.salesReceiptId,
       },
+    });
+    await activityLog.record(req, {
+      action: activityLog.ACTIONS.RETURN_CREATED,
+      targetId: result.return_number || result.id,
+      targetLabel: result.order_number || orderNumber,
+      detail: result.return_type,
     });
     res.status(201).json(result);
   } catch (error) {

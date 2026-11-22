@@ -52,6 +52,7 @@ app.use('/api/installment-payments', require('./routes/installmentPayments'));
 app.use('/api/platform', require('./routes/platform'));
 app.use('/api/settings', require('./routes/settings'));
 app.use('/api/witnesses', require('./routes/witnesses'));
+app.use('/api/activity-logs', require('./routes/activityLogs'));
 
 const { isBlockedUploadPath } = require('./utils/privateUpload');
 
@@ -88,6 +89,7 @@ app.get('/', (req, res) => {
       sales: '/api/sales',
       users: '/api/users',
       platform: '/api/platform',
+      activityLogs: '/api/activity-logs',
     },
   });
 });

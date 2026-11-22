@@ -12,6 +12,7 @@ const staffUserService = require('../services/staffUserService');
 const { withoutCredentialFields } = require('../utils/publicUser');
 const { pinProblem } = require('../utils/pin');
 const { isStaffRole, STAFF_ROLE_ERROR } = require('../config/staffRoles');
+const activityLog = require('../services/activityLogService');
 
 const getAllUsers = async (req, res) => {
   try {
@@ -92,6 +93,13 @@ const createUser = async (req, res) => {
       isActive: true,
     });
 
+    await activityLog.record(req, {
+      tenantId: newUser?.tenant_id ?? tenantId,
+      action: activityLog.ACTIONS.USER_CREATED,
+      targetId: newUser?.id,
+      targetLabel: newUser?.email || normalizedEmail,
+      detail: normalizedRole,
+    });
     res.status(201).json(withoutCredentialFields(newUser));
   } catch (error) {
     console.error('Create user error:', error);
@@ -168,6 +176,27 @@ const updateUser = async (req, res) => {
       pinHash,
     });
 
+    const names = [];
+    if (username && String(finalUsername).toLowerCase() !== String(user.username).toLowerCase()) {
+      names.push('username');
+    }
+    if (role !== undefined && role !== null && role !== '' && normalizeRole(role) !== user.role) {
+      names.push('role');
+    }
+    if (fullName !== undefined && String(fullName ?? '') !== String(user.full_name ?? user.fullName ?? '')) {
+      names.push('fullName');
+    }
+    if (branchId !== undefined && String(branchId ?? '') !== String(user.branch_id ?? user.branchId ?? '')) {
+      names.push('branchId');
+    }
+    if (pin !== undefined) names.push('pin');
+    await activityLog.record(req, {
+      tenantId: user.tenant_id,
+      action: activityLog.ACTIONS.USER_UPDATED,
+      targetId: user.id ?? userId,
+      targetLabel: user.email,
+      detail: names.join(', ') || null,
+    });
     res.json(withoutCredentialFields(updated));
   } catch (error) {
     console.error('Update user error:', error);
@@ -194,6 +223,12 @@ const deleteUser = async (req, res) => {
     }
 
     await repo.softDeleteStaffUser(userId);
+    await activityLog.record(req, {
+      tenantId: user.tenant_id,
+      action: activityLog.ACTIONS.USER_DELETED,
+      targetId: user.id ?? userId,
+      targetLabel: user.email,
+    });
     res.json({ message: 'User deleted successfully' });
   } catch (error) {
     console.error('Delete user error:', error);
